@@ -93,7 +93,17 @@ std::vector<double> ACT::g(double tc, double fc, double logDt, double c) {
             chirplet[i] = 0.0;
         }
     }
-    
+    // L2 normalize chirplet to unit energy to avoid duration bias
+    double energy = 0.0;
+    for (int i = 0; i < length; ++i) energy += chirplet[i] * chirplet[i];
+    if (energy > 0.0) {
+        double inv_norm = 1.0 / std::sqrt(energy);
+        for (int i = 0; i < length; ++i) chirplet[i] *= inv_norm;
+    } else {
+        // Fallback: return zeros if degenerate
+        std::fill(chirplet.begin(), chirplet.end(), 0.0);
+    }
+
     return chirplet;
 }
 
@@ -195,8 +205,8 @@ ACT::TransformResult ACT::transform(const std::vector<double>& signal, int order
         // Generate optimized chirplet
         auto updated_base_chirplet = g(new_params[0], new_params[1], new_params[2], new_params[3]);
         
-        // Calculate coefficient
-        double updated_chirplet_coeff = inner_product(updated_base_chirplet, signal) / FS;
+        // Calculate coefficient (unit-energy atoms => LS amplitude is simple dot product)
+        double updated_chirplet_coeff = inner_product(updated_base_chirplet, signal);
         
         // Create new chirp component
         std::vector<double> new_chirp(length);

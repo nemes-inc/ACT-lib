@@ -68,9 +68,13 @@ TEST_EEG_GAMMA_30S_TARGET = $(BINDIR)/test_eeg_gamma_30s
 TEST_SIMD_TARGET = $(BINDIR)/test_simd
 TEST_SIMD_MT_TARGET = $(BINDIR)/test_simd_multithreaded
 PROFILE_ACT_TARGET = $(BINDIR)/profile_act
+TEST_ACT_SYNTHETIC_TARGET = $(BINDIR)/test_act_synthetic
+TEST_ACT_SYNTHETIC_SIMD_TARGET = $(BINDIR)/test_act_synthetic_simd
+TEST_ACT_SYNTHETIC_MT_TARGET = $(BINDIR)/test_act_synthetic_mt
+TEST_ACT_SYNTHETIC_SIMD_MT_TARGET = $(BINDIR)/test_act_synthetic_simd_mt
 
 # Default target
-all: $(TEST_ACT_TARGET) $(TEST_EEG_GAMMA_8S_TARGET) $(TEST_EEG_GAMMA_30S_TARGET) $(TEST_SIMD_TARGET) $(PROFILE_ACT_TARGET)
+all: $(TEST_ACT_TARGET) $(TEST_EEG_GAMMA_8S_TARGET) $(TEST_EEG_GAMMA_30S_TARGET) $(TEST_SIMD_TARGET) $(PROFILE_ACT_TARGET) $(TEST_ACT_SYNTHETIC_TARGET) $(TEST_ACT_SYNTHETIC_SIMD_TARGET) $(TEST_ACT_SYNTHETIC_MT_TARGET) $(TEST_ACT_SYNTHETIC_SIMD_MT_TARGET)
 
 # Create directories
 $(OBJDIR):
@@ -124,6 +128,26 @@ $(PROFILE_ACT_TARGET): $(ACT_CORE_OBJECTS) $(OBJDIR)/profile_act.o $(ALGLIB_OBJE
 	@echo "Linking ACT profiling executable..."
 	@$(CXX) $^ -o $@ $(LDFLAGS)
 	@echo "✅ ACT profiling executable created: $@"
+
+$(TEST_ACT_SYNTHETIC_TARGET): $(ACT_CORE_OBJECTS) $(OBJDIR)/test_act_synthetic.o $(ALGLIB_OBJECTS) | $(BINDIR)
+	@echo "Linking synthetic ACT test executable..."
+	@$(CXX) $^ -o $@ $(LDFLAGS)
+	@echo "✅ Synthetic ACT test executable created: $@"
+
+$(TEST_ACT_SYNTHETIC_SIMD_TARGET): $(ACT_CORE_OBJECTS) $(OBJDIR)/test_act_synthetic_simd.o $(ALGLIB_OBJECTS) | $(BINDIR)
+	@echo "Linking synthetic ACT SIMD test executable..."
+	@$(CXX) $^ -o $@ $(LDFLAGS)
+	@echo "✅ Synthetic ACT SIMD test executable created: $@"
+
+$(TEST_ACT_SYNTHETIC_MT_TARGET): $(ACT_CORE_OBJECTS) $(OBJDIR)/ACT_multithreaded.o $(OBJDIR)/test_act_synthetic_mt.o $(ALGLIB_OBJECTS) | $(BINDIR)
+	@echo "Linking synthetic ACT multithreaded test executable..."
+	@$(CXX) $^ -o $@ $(LDFLAGS)
+	@echo "✅ Synthetic ACT multithreaded test executable created: $@"
+
+$(TEST_ACT_SYNTHETIC_SIMD_MT_TARGET): $(ACT_CORE_OBJECTS) $(OBJDIR)/ACT_SIMD_MultiThreaded.o $(OBJDIR)/ACT_SIMD.o $(OBJDIR)/test_act_synthetic_simd_mt.o $(ALGLIB_OBJECTS) | $(BINDIR)
+	@echo "Linking synthetic ACT SIMD multithreaded test executable..."
+	@$(CXX) $^ -o $@ $(LDFLAGS)
+	@echo "✅ Synthetic ACT SIMD multithreaded test executable created: $@"
 
 # Run targets
 test: $(TEST_ACT_TARGET)

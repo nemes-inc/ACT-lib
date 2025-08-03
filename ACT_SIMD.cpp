@@ -301,6 +301,16 @@ std::vector<double> ACT_SIMD::g_accelerate(double tc, double fc, double logDt, d
         }
     }
     
+    // L2 normalize chirplet to unit energy (match base class behavior) using Accelerate
+    double energy = 0.0;
+    vDSP_dotprD(chirplet.data(), 1, chirplet.data(), 1, &energy, signal_length);
+    if (energy > 0.0) {
+        double inv_norm = 1.0 / std::sqrt(energy);
+        vDSP_vsmulD(chirplet.data(), 1, &inv_norm, chirplet.data(), 1, signal_length);
+    } else {
+        std::fill(chirplet.begin(), chirplet.end(), 0.0);
+    }
+
     return chirplet;
 #else
     // Fallback to base class implementation
@@ -394,6 +404,16 @@ std::vector<double> ACT_SIMD::g_neon(double tc, double fc, double logDt, double 
         }
     }
     
+    // L2 normalize chirplet to unit energy (match base class behavior) using Accelerate
+    double energy = 0.0;
+    vDSP_dotprD(chirplet.data(), 1, chirplet.data(), 1, &energy, signal_length);
+    if (energy > 0.0) {
+        double inv_norm = 1.0 / std::sqrt(energy);
+        vDSP_vsmulD(chirplet.data(), 1, &inv_norm, chirplet.data(), 1, signal_length);
+    } else {
+        std::fill(chirplet.begin(), chirplet.end(), 0.0);
+    }
+
     return chirplet;
 #else
     // Fallback to base class implementation

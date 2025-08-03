@@ -86,6 +86,39 @@ ACT (Base Class)
 - **logDt (Duration)**: Logarithmic duration parameter
 - **c (Chirp Rate)**: Frequency modulation rate (Hz/s)
 
+### Chirplet Generation: C++ vs Python Reference
+
+The original Python reference implementation generated chirplets without unit-energy normalization and returned the real part when `complex=False`:
+
+```python
+def g(self, tc=0, fc=1, logDt=0, c=0):
+    """
+    tc: in SAMPLES; fc: Hz; logDt: log duration; c: Hz/s
+    FS: sampling rate; length: number of samples
+    """
+    tc /= self.FS
+    Dt = np.exp(logDt)
+    t = np.arange(self.length)/self.FS
+    gaussian_window = np.exp(-0.5 * ((t - tc)/(Dt))**2)
+    complex_exp = np.exp(2j*np.pi * (c*(t-tc)**2 + fc*(t-tc)))
+    final_chirplet = gaussian_window * complex_exp
+    if not self.complex:
+        final_chirplet = np.real(final_chirplet)
+    if self.float32:
+        final_chirplet = final_chirplet.astype(np.float32)
+    return final_chirplet
+```
+
+In C++ (`ACT.cpp`), we made two critical changes to match principled ACT behavior and fix duration bias:
+
+- Unit-energy normalization: every generated chirplet `g` is L2-normalized to have unit energy. Without normalization, longer-duration atoms systematically win during dictionary search, forcing `logDt` to the upper bound and degrading recovery. Normalization removes this bias and aligns the objective with correlation rather than raw energy.
+- Coefficient estimation scaling: with unit-energy atoms, the optimal coefficient is just the dot product between the signal and the chirplet. We removed an incorrect division by the sampling rate (FS) that had been applied previously. With normalization, this yields correct amplitudes and SNR.
+
+Additional notes:
+- Real output uses cosine consistently when `complex_mode=false` (real part of the complex exponential), matching the Python `np.real(...)` behavior.
+- The same unit-energy normalization is implemented in the SIMD code paths (`ACT_SIMD.cpp`) using Apple Accelerate (vDSP) on macOS and NEON helpers on ARM for efficiency.
+- These changes were validated by strict synthetic tests (noiseless and 0 dB noisy), demonstrating accurate parameter recovery and SNR improvement, and eliminating the previous `logDt` upper-bound bias.
+
 ### Dictionary Design
 The dictionary contains pre-computed chirplet templates for all parameter combinations:
 ```
