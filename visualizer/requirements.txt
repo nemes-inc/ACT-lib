@@ -1,0 +1,16 @@
+# Python Visualizer Requirements for ACT C++ Implementation
+# Interactive visualization of Adaptive Chirplet Transform results
+
+# Core scientific computing
+numpy>=1.21.0
+pandas>=1.3.0
+
+# Plotting and visualization
+matplotlib>=3.5.0
+
+# Optional: Enhanced plotting capabilities
+seaborn>=0.11.0
+
+# Development and testing (optional)
+jupyter>=1.0.0
+ipython>=7.0.0

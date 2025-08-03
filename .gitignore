@@ -1,0 +1,146 @@
+# Adaptive Chirplet Transform (ACT) - C++ Implementation
+# .gitignore for professional GitHub release
+
+# Build artifacts
+obj/
+bin/
+*.o
+*.a
+*.so
+*.dylib
+*.dll
+
+# Executables
+test_act
+test_eeg_gamma*
+test_simd*
+profile_act
+*.exe
+
+# Dictionary cache files (large binary files)
+*.bin
+*_dict.bin
+*_cache.bin
+dict_cache.bin
+eeg_gamma_dict.bin
+
+# Results and output files
+*.csv
+results/
+output/
+
+# Temporary files
+*.tmp
+*.temp
+*~
+.DS_Store
+Thumbs.db
+
+# Python virtual environment
+visualizer/venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.*.swp
+.*.swo
+
+# System files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Backup files
+*.bak
+*.backup
+Makefile_old
+
+# Log files
+*.log
+debug.log
+error.log
+
+# Core dumps
+core
+core.*
+
+# Profiling output
+gmon.out
+callgrind.out.*
+*.prof
+
+# CMake (if used)
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+Makefile.cmake
+
+# Autotools (if used)
+.deps/
+.libs/
+*.la
+*.lo
+Makefile.in
+aclocal.m4
+autom4te.cache/
+config.guess
+config.sub
+configure
+depcomp
+install-sh
+ltmain.sh
+missing
+
+# Package files
+*.tar.gz
+*.zip
+*.rar
+*.7z
+
+# Documentation build
+docs/_build/
+docs/html/
+docs/latex/
+
+# Test data (keep sample data, ignore large datasets)
+data/large_datasets/
+data/*.dat
+data/*.raw
+
+# Keep essential files
+!data/muse-testdata.csv
+!alglib/
+!README.md
+!LICENSE
+!Makefile
