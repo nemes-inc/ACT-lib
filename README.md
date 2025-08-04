@@ -261,6 +261,8 @@ Adaptive_Chirplet_Transform_Cpp/
 
 Results can be visualized using the integrated Python visualizer:
 
+![ACT Visualizer Sample](ACT_visualizer_sample.png)
+
 ### Setup
 ```bash
 # Navigate to visualizer directory
@@ -363,6 +365,10 @@ The visualizer then opens an interactive plot showing:
 - **Interactive controls** for exploring the analysis results
 
 ## Research Background
+
+### Background
+
+Adapted from the python code at : [https://github.com/amanb2000/Adaptive_Chirplet_Transform](https://github.com/amanb2000/Adaptive_Chirplet_Transform)
 
 ### Published Work
 Based on the seminal paper:

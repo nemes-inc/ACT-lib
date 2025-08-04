@@ -68,13 +68,14 @@ TEST_EEG_GAMMA_30S_TARGET = $(BINDIR)/test_eeg_gamma_30s
 TEST_SIMD_TARGET = $(BINDIR)/test_simd
 TEST_SIMD_MT_TARGET = $(BINDIR)/test_simd_multithreaded
 PROFILE_ACT_TARGET = $(BINDIR)/profile_act
+PROFILE_ACT_SIMD_MT_TARGET = $(BINDIR)/profile_act_SIMD_MultiThreaded
 TEST_ACT_SYNTHETIC_TARGET = $(BINDIR)/test_act_synthetic
 TEST_ACT_SYNTHETIC_SIMD_TARGET = $(BINDIR)/test_act_synthetic_simd
 TEST_ACT_SYNTHETIC_MT_TARGET = $(BINDIR)/test_act_synthetic_mt
 TEST_ACT_SYNTHETIC_SIMD_MT_TARGET = $(BINDIR)/test_act_synthetic_simd_mt
 
 # Default target
-all: $(TEST_ACT_TARGET) $(TEST_EEG_GAMMA_8S_TARGET) $(TEST_EEG_GAMMA_30S_TARGET) $(TEST_SIMD_TARGET) $(PROFILE_ACT_TARGET) $(TEST_ACT_SYNTHETIC_TARGET) $(TEST_ACT_SYNTHETIC_SIMD_TARGET) $(TEST_ACT_SYNTHETIC_MT_TARGET) $(TEST_ACT_SYNTHETIC_SIMD_MT_TARGET)
+all: $(TEST_ACT_TARGET) $(TEST_EEG_GAMMA_8S_TARGET) $(TEST_EEG_GAMMA_30S_TARGET) $(TEST_SIMD_TARGET) $(PROFILE_ACT_TARGET) $(PROFILE_ACT_SIMD_MT_TARGET) $(TEST_ACT_SYNTHETIC_TARGET) $(TEST_ACT_SYNTHETIC_SIMD_TARGET) $(TEST_ACT_SYNTHETIC_MT_TARGET) $(TEST_ACT_SYNTHETIC_SIMD_MT_TARGET)
 
 # Create directories
 $(OBJDIR):
@@ -129,6 +130,11 @@ $(PROFILE_ACT_TARGET): $(ACT_CORE_OBJECTS) $(OBJDIR)/profile_act.o $(ALGLIB_OBJE
 	@$(CXX) $^ -o $@ $(LDFLAGS)
 	@echo "✅ ACT profiling executable created: $@"
 
+$(PROFILE_ACT_SIMD_MT_TARGET): $(ACT_CORE_OBJECTS) $(OBJDIR)/profile_act_SIMD_MultiThreaded.o $(ALGLIB_OBJECTS) | $(BINDIR)
+	@echo "Linking SIMD + MT profiling executable..."
+	@$(CXX) $^ -o $@ $(LDFLAGS)
+	@echo "✅ SIMD + MT profiling executable created: $@"
+
 $(TEST_ACT_SYNTHETIC_TARGET): $(ACT_CORE_OBJECTS) $(OBJDIR)/test_act_synthetic.o $(ALGLIB_OBJECTS) | $(BINDIR)
 	@echo "Linking synthetic ACT test executable..."
 	@$(CXX) $^ -o $@ $(LDFLAGS)
@@ -174,6 +180,10 @@ profile: $(PROFILE_ACT_TARGET)
 	@echo "📊 Running ACT performance profiling..."
 	@./$(PROFILE_ACT_TARGET)
 
+profile-simd-mt: $(PROFILE_ACT_SIMD_MT_TARGET)
+	@echo "📊 Running ACT SIMD + Multi-threaded profiling..."
+	@./$(PROFILE_ACT_SIMD_MT_TARGET)
+
 # Utility targets
 clean:
 	@echo "🧹 Cleaning build artifacts..."
@@ -191,6 +201,7 @@ help:
 	@echo "  eeg-30s      - Build 30-second EEG analysis"
 	@echo "  simd         - Build SIMD performance test"
 	@echo "  profile      - Build performance profiling tool"
+	@echo "  profile-simd-mt - Build SIMD+MT profiling tool"
 	@echo ""
 	@echo "Run Targets:"
 	@echo "  test         - Run basic ACT test"
@@ -199,6 +210,7 @@ help:
 	@echo "  simd         - Run SIMD performance test"
 	@echo "  simd-mt      - Run SIMD multithreaded test"
 	@echo "  profile      - Run performance profiling"
+	@echo "  profile-simd-mt - Run SIMD + MT profiling"
 	@echo ""
 	@echo "Utility Targets:"
 	@echo "  clean        - Remove build artifacts"
