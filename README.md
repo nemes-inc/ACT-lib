@@ -1,6 +1,6 @@
 # C++ Adaptive Chirplet Transform (ACT) - C++ Implementation
 
-A high-performance C++ implementation of the Adaptive Chirplet Transform for time-frequency analysis of non-stationary signals, with specialized optimizations for EEG gamma-band analysis.
+A high-performance, general-purpose C++ implementation of the Adaptive Chirplet Transform for time-frequency analysis of non‑stationary signals. Suitable for audio, radar/sonar, biomedical (including EEG), and other domains. 
 
 ## Overview
 
@@ -8,8 +8,25 @@ The Adaptive Chirplet Transform (ACT) is a powerful signal processing technique 
 
 - **High Performance**: SIMD-optimized dictionary search with multi-threading support
 - **Flexible Analysis**: Configurable parameter ranges for different signal types
-- **EEG Applications**: Specialized gamma-band analysis for neuroscience research
+- **Example Applications**: EEG-oriented examples to demonstrate usage
 - **Professional Quality**: Production-ready code with comprehensive testing
+
+### Algorithm Summary (Dictionary Search + Optimization)
+This implementation uses a two-stage, greedy matching pursuit approach:
+
+1) Coarse dictionary search
+   - Build a discrete grid of chirplet parameters (tc, fc, logDt, c).
+   - Generate unit-energy chirplet templates and compute correlations against the current residual.
+   - Select the best-scoring atom as the initialization.
+
+2) Local continuous optimization
+   - Refine the selected atom’s parameters via BFGS over (tc, fc, logDt, c) to maximize correlation.
+   - Estimate the optimal coefficient (least-squares against unit-energy template).
+
+3) Greedy update and iterate
+   - Subtract the reconstructed chirplet from the residual and repeat steps (1–2) up to the chosen transform order K.
+
+Performance notes: The heavy step is the dictionary search, which is accelerated with SIMD (vDSP/NEON) and optional multi-threading across signals. Unit-energy normalization removes duration bias and stabilizes coefficient estimation.
 
 ## Features
 
@@ -88,7 +105,7 @@ ACT (Base Class)
 
 ### Chirplet Generation: C++ vs Python Reference
 
-The original Python reference implementation generated chirplets without unit-energy normalization and returned the real part when `complex=False`:
+The original Python reference implementation generated chirplets without unit-energy normalization.
 
 ```python
 def g(self, tc=0, fc=1, logDt=0, c=0):
@@ -211,12 +228,6 @@ Initial findings on performance using the included dataset:
 2. **Duration Diversity**: Limited logDt values severely constrained duration diversity, leading to uniform chirplet durations
 3. **Optimization Benefits**: Two-stage process (dictionary + BFGS) enables detection of precise frequencies (e.g., 28.3 Hz) between discrete dictionary steps
 4. **Memory vs. Resolution Trade-off**: Balanced parameter ranges achieve good temporal diversity while maintaining feasible memory usage
-
-### Neurophysiological Insights
-- **Gamma Bursts**: Transient high-frequency oscillations
-- **Frequency Modulation**: Up-chirps and down-chirps
-- **Temporal Dynamics**: Precise timing of neural events
-- **Amplitude Tracking**: Oscillation strength over time
 
 ## Dependencies
 
