@@ -206,7 +206,7 @@ ACT::TransformResult ACT::transform(const std::vector<double>& signal, int order
         auto updated_base_chirplet = g(new_params[0], new_params[1], new_params[2], new_params[3]);
         
         // Calculate coefficient (unit-energy atoms => LS amplitude is simple dot product)
-        double updated_chirplet_coeff = inner_product(updated_base_chirplet, signal);
+        double updated_chirplet_coeff = inner_product(updated_base_chirplet, result.residue);
         
         // Create new chirp component
         std::vector<double> new_chirp(length);
@@ -286,6 +286,9 @@ void ACTOptimizer::optimization_function(const alglib::real_1d_array &x, double 
     }
     
     // Call the cost function
+    ACTOptimizer* optimizer = static_cast<ACTOptimizer*>(ptr);
+    std::vector<double>& signal = optimizer->signal;
+    ACT* act_instance = optimizer->act_instance;
     func = act_instance->minimize_this(params, signal);
 }
 
@@ -297,6 +300,9 @@ void ACTOptimizer::optimization_function_with_gradient(const alglib::real_1d_arr
     }
     
     // Call the cost function
+    ACTOptimizer* optimizer = static_cast<ACTOptimizer*>(ptr);
+    std::vector<double>& signal = optimizer->signal;
+    ACT* act_instance = optimizer->act_instance;
     func = act_instance->minimize_this(params, signal);
     
     // Check for invalid function value
@@ -363,14 +369,11 @@ void ACTOptimizer::optimization_function_with_gradient(const alglib::real_1d_arr
     }
 }
 
-ACT* ACTOptimizer::act_instance = nullptr;
-std::vector<double> ACTOptimizer::signal;
 
 std::vector<double> ACT::bfgs_optimize(const std::vector<double>& initial_params, 
                                       const std::vector<double>& signal) {
     // Store signal and instance for optimization function
-    ACTOptimizer::act_instance = this;
-    ACTOptimizer::signal = signal;
+    ACTOptimizer optimizer(this, signal);
     
     // Try ALGLIB numerical gradient optimization first
     try {
@@ -386,21 +389,27 @@ std::vector<double> ACT::bfgs_optimize(const std::vector<double>& initial_params
             x[i] = initial_params[i];
         }
         
-        // Set parameter bounds (matching Python implementation)
+        // Set local parameter bounds: ±1 grid step around initial dictionary match,
+        // clamped to the dictionary parameter ranges
         bndl.setlength(4);
         bndu.setlength(4);
-        
-        bndl[0] = 0;                    // tc: within signal length
-        bndu[0] = length - 1;
-        
-        bndl[1] = 0.1;                  // fc: positive, below Nyquist
-        bndu[1] = FS / 2;
-        
-        bndl[2] = -5;                   // logDt: reasonable duration range
-        bndu[2] = 0;
-        
-        bndl[3] = -50;                  // c: reasonable chirp rate range
-        bndu[3] = 50;
+
+        double tc_step = param_ranges.tc_step;
+        double fc_step = param_ranges.fc_step;
+        double logDt_step = param_ranges.logDt_step;
+        double c_step = param_ranges.c_step;
+
+        bndl[0] = std::max(param_ranges.tc_min,     initial_params[0] - tc_step);
+        bndu[0] = std::min(param_ranges.tc_max,     initial_params[0] + tc_step);
+
+        bndl[1] = std::max(param_ranges.fc_min,     initial_params[1] - fc_step);
+        bndu[1] = std::min(param_ranges.fc_max,     initial_params[1] + fc_step);
+
+        bndl[2] = std::max(param_ranges.logDt_min,  initial_params[2] - logDt_step);
+        bndu[2] = std::min(param_ranges.logDt_max,  initial_params[2] + logDt_step);
+
+        bndl[3] = std::max(param_ranges.c_min,      initial_params[3] - c_step);
+        bndu[3] = std::min(param_ranges.c_max,      initial_params[3] + c_step);
         
         // Validate and clamp initial parameters to bounds
         for (int i = 0; i < 4; ++i) {
@@ -415,7 +424,7 @@ std::vector<double> ACT::bfgs_optimize(const std::vector<double>& initial_params
         alglib::minbcsetxrep(state, false);
         
         // Optimize with numerical gradients only
-        alglib::minbcoptimize(state, ACTOptimizer::optimization_function, nullptr, nullptr);
+        alglib::minbcoptimize(state, optimizer.optimization_function, nullptr, &optimizer);
         alglib::minbcresults(state, x, rep);
         
         // Check if optimization succeeded

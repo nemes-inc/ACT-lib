@@ -152,12 +152,13 @@ private:
 };
 
 // Optimization wrapper class for ALGLIB
-class ACTOptimizer {
+class ACTOptimizer {    
 public:
+    ACTOptimizer(ACT* act_instance, const std::vector<double>& signal) : act_instance(act_instance), signal(signal) {}
     static void optimization_function(const alglib::real_1d_array &x, double &func, void *ptr);
     static void optimization_function_with_gradient(const alglib::real_1d_array &x, double &func, alglib::real_1d_array &grad, void *ptr);
-    static ACT* act_instance;
-    static std::vector<double> signal;
+    ACT* act_instance;
+    std::vector<double> signal;
 };
 
 #endif // ACT_H

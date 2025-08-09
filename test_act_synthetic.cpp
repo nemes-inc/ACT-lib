@@ -104,8 +104,8 @@ int main() {
         }
 
         // Validation thresholds: require minimum absolute SNR and improvement over input
-        const double min_abs_snr_db = 8.0;     // absolute quality threshold
-        const double min_improve_db = 6.0;     // denoising/improvement threshold
+        const double min_abs_snr_db = 12.0;     // absolute quality threshold
+        const double min_improve_db = 11.0;     // denoising/improvement threshold
 
         // Precompute input SNR
         double noisy_energy = 0.0;
@@ -116,16 +116,10 @@ int main() {
         // Define a sweep of increasingly finer grids and orders to evaluate compute cost vs quality
         struct Config { double tc_step; double fc_step; double logdt_min; double logdt_max; double logdt_step; double c_step; int order; };
         std::vector<Config> sweep = {
-            // Original-style bounds: logDt in [-3,-1]
-            { length/32.0, 1.0,   -3.0, -1.0, 0.5, 4.0, 3 },
-            { length/32.0, 0.5,   -3.0, -1.0, 0.5, 2.0, 5 },
-            { length/64.0, 0.5,   -3.0, -1.0, 0.5, 2.0, 6 },
-            { length/64.0, 0.25,  -3.0, -1.0, 0.5, 2.0, 6 },
-            { length/64.0, 0.25,  -3.0, -1.0, 0.25, 2.0, 8 },
-            { length/64.0, 0.25,  -3.0, -1.0, 0.25, 1.0, 8 },
-            // README-guided diagnostic: allow logDt up to 0.0 with finer steps
-            { length/64.0, 0.25,  -3.0,  0.0, 0.25, 1.0, 6 },
-            { length/64.0, 0.25,  -3.0,  0.0, 0.20, 1.0, 8 }
+            { length/32.0, 1.0,   -3.0, -1.0, 0.5, 4.0, 2 },
+            { length/64.0, 0.5,   -3.0, -1.0, 0.5, 2.0, 2 },
+            { length/64.0, 0.25,  -3.0, -1.0, 0.25, 1.0, 2 },
+            { length/64.0, 0.25,  -3.0,  0.0, 0.20, 1.0, 2 }
         };
 
         std::cout << std::fixed << std::setprecision(2);
@@ -155,9 +149,11 @@ int main() {
 
             auto t0 = std::chrono::steady_clock::now();
             ACT act(fs, length, "synth_dict_cache.bin", ranges, false, true, false);
+            auto t1 = std::chrono::steady_clock::now();            
             auto result = act.transform(signal, cfg.order, false);
-            auto t1 = std::chrono::steady_clock::now();
-            double elapsed_ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
+            auto t2 = std::chrono::steady_clock::now();
+            double dict_elapsed_ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
+            double trans_elapsed_ms = std::chrono::duration<double, std::milli>(t2 - t1).count();
 
             if (result.params.empty()) {
                 std::cerr << "FAIL: No chirplets found" << std::endl;
@@ -179,7 +175,8 @@ int main() {
             double est_mb = est_bytes / (1024.0 * 1024.0);
 
             std::cout << "ACT dict size: " << dict_size << ", est matrix memory: ~" << est_mb << " MB\n";
-            std::cout << "Elapsed: " << elapsed_ms << " ms\n";
+            std::cout << "Dictionary generation: " << dict_elapsed_ms << " ms\n";
+            std::cout << "Transform: " << trans_elapsed_ms << " ms\n";
             std::cout << "Output SNR: " << output_snr_db << " dB, Improvement: " << improvement_db << " dB\n";
 
             // Recovered vs Truth reporting (greedy nearest matching)
@@ -220,7 +217,7 @@ int main() {
                 best_imp = improvement_db;
                 best_dict = dict_size;
                 best_order = cfg.order;
-                best_time_ms = elapsed_ms;
+                best_time_ms = dict_elapsed_ms + trans_elapsed_ms;
             }
 
             if (!noiseless && output_snr_db >= min_abs_snr_db && improvement_db >= min_improve_db) {

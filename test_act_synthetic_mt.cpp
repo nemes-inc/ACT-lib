@@ -10,6 +10,7 @@
 #include <chrono>
 #include <limits>
 #include <cstdlib>
+#include <thread>
 #include "ACT_multithreaded.h"
 
 // Generate a single Gaussian-enveloped chirp (chirplet) sample-wise
@@ -78,8 +79,8 @@ int main() {
             for (auto& s : signals) for (int i = 0; i < length; ++i) s[i] += gauss(rng);
         }
 
-        const double min_abs_snr_db = 8.0;
-        const double min_improve_db = 6.0;
+        const double min_abs_snr_db = 12.0;
+        const double min_improve_db = 11.0;
 
         double noisy_energy = 0.0; for (int i = 0; i < length; ++i) noisy_energy += signals[0][i] * signals[0][i];
         double input_snr_db = noiseless ? std::numeric_limits<double>::infinity()
@@ -87,12 +88,19 @@ int main() {
 
         struct Config { double tc_step; double fc_step; double logdt_min; double logdt_max; double logdt_step; double c_step; int order; };
         std::vector<Config> sweep = {
-            { length/32.0, 1.0,   -3.0, -1.0, 0.5, 4.0, 3 }
+            { length/32.0, 1.0,   -3.0, -1.0, 0.5, 4.0, 2 },
+            { length/64.0, 0.5,   -3.0, -1.0, 0.5, 2.0, 2 },
+            { length/64.0, 0.25,  -3.0, -1.0, 0.25, 1.0, 2 },
+            { length/64.0, 0.25,  -3.0,  0.0, 0.20, 1.0, 2 }
         };
 
         std::cout << std::fixed << std::setprecision(2);
         if (noiseless) std::cout << "Input SNR:  inf dB (noiseless baseline)\n";
         else std::cout << "Input SNR:  " << input_snr_db << " dB (target " << target_input_snr_db << " dB)\n";
+
+        double best_out = -1e9, best_imp = -1e9;
+        size_t best_dict = 0; int best_order = 0;
+        double best_time_ms = 0.0;
 
         for (size_t idx = 0; idx < sweep.size(); ++idx) {
             const auto& cfg = sweep[idx];
@@ -109,12 +117,15 @@ int main() {
                 -20.0, 20.0, cfg.c_step
             );
 
-            ACT_MultiThreaded act(fs, length, "synth_dict_cache_mt.bin", ranges, false, true, false);
-
             auto t0 = std::chrono::steady_clock::now();
-            auto results = act.transform_batch_parallel(signals, cfg.order, false, 0);
+            ACT_MultiThreaded act(fs, length, "synth_dict_cache_mt.bin", ranges, false, true, false);
             auto t1 = std::chrono::steady_clock::now();
-            double elapsed_ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
+            double dict_elapsed_ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
+
+            auto t2 = std::chrono::steady_clock::now();
+            auto results = act.transform_batch_parallel(signals, cfg.order, false, 0);
+            auto t3 = std::chrono::steady_clock::now();
+            double trans_elapsed_ms = std::chrono::duration<double, std::milli>(t3 - t2).count();
 
             if (results.empty()) { std::cerr << "FAIL: No results" << std::endl; return 1; }
 
@@ -134,18 +145,77 @@ int main() {
             double est_mb = est_bytes / (1024.0 * 1024.0);
 
             std::cout << "ACT dict size: " << dict_size << ", est matrix memory: ~" << est_mb << " MB\n";
-            std::cout << "Batch elapsed: " << elapsed_ms << " ms (" << (elapsed_ms / batch) << " ms/signal)\n";
+            std::cout << "Dictionary generation: " << dict_elapsed_ms << " ms\n";
+            std::cout << "Transform: " << trans_elapsed_ms << " ms\n";
             std::cout << "Output SNR: " << output_snr_db << " dB, Improvement: " << improvement_db << " dB\n";
+
+            // Recovered vs Truth reporting (greedy nearest matching) for first signal
+            auto gt = ground_truth_params(length, fs);
+            size_t kmax = std::min<size_t>(3, std::min(result.params.size(), gt.size()));
+            std::vector<bool> gt_used(gt.size(), false);
+            std::cout << "Recovered vs Truth (up to " << kmax << "):\n";
+            for (size_t r = 0; r < kmax; ++r) {
+                const auto &rp = result.params[r];
+                int best_idx = -1; double best_dist = 1e300;
+                for (size_t gti = 0; gti < gt.size(); ++gti) {
+                    if (gt_used[gti]) continue;
+                    double dtc = rp[0] - gt[gti][0];
+                    double dfc = rp[1] - gt[gti][1];
+                    double dld = rp[2] - gt[gti][2];
+                    double dc  = rp[3] - gt[gti][3];
+                    double dist = dtc*dtc + dfc*dfc + dld*dld + dc*dc;
+                    if (dist < best_dist) { best_dist = dist; best_idx = (int)gti; }
+                }
+                if (best_idx >= 0) {
+                    gt_used[best_idx] = true;
+                    double dtc = rp[0] - gt[best_idx][0];
+                    double dfc = rp[1] - gt[best_idx][1];
+                    double dld = rp[2] - gt[best_idx][2];
+                    double dc  = rp[3] - gt[best_idx][3];
+                    double coeff = (r < result.coeffs.size() ? result.coeffs[r] : 0.0);
+                    std::cout << "  Atom " << (r+1) << ": rec(tc=" << rp[0] << ", fc=" << rp[1]
+                              << ", logDt=" << rp[2] << ", c=" << rp[3] << ", a~" << coeff << ") | "
+                              << "gt(tc=" << gt[best_idx][0] << ", fc=" << gt[best_idx][1]
+                              << ", logDt=" << gt[best_idx][2] << ", c=" << gt[best_idx][3] << ") | "
+                              << "d(tc,fc,logDt,c)=(" << dtc << ", " << dfc << ", " << dld << ", " << dc << ")\n";
+                }
+            }
+
+            // Track best metrics
+            if (output_snr_db > best_out) {
+                best_out = output_snr_db;
+                best_imp = improvement_db;
+                best_dict = dict_size;
+                best_order = cfg.order;
+                best_time_ms = dict_elapsed_ms + trans_elapsed_ms;
+            }
 
             bool pass = (output_snr_db >= min_abs_snr_db) && (improvement_db >= min_improve_db);
             if (pass) {
                 std::cout << "\nSynthetic ACT MT test passed at this configuration." << std::endl;
+                if (noiseless) {
+                    std::cout << "Noiseless baseline complete. Best Output SNR=" << best_out
+                              << " dB, dict_size=" << best_dict << ", order=" << best_order
+                              << ", elapsed=" << best_time_ms << " ms\n";
+                }
                 return 0;
             }
         }
 
-        std::cerr << "\nFAIL: No configuration met the SNR thresholds." << std::endl;
-        return 1;
+        if (noiseless) {
+            std::cout << "\nNoiseless baseline complete. Best Output SNR=" << best_out
+                      << " dB, dict_size=" << best_dict << ", order=" << best_order
+                      << ", elapsed=" << best_time_ms << " ms" << std::endl;
+            return 0;
+        } else {
+            std::cerr << "\nFAIL: No configuration met the SNR thresholds." << std::endl;
+            if (std::isfinite(input_snr_db)) {
+                std::cerr << "Best Output SNR=" << best_out << " dB, Best Improvement=" << best_imp
+                          << " dB, dict_size=" << best_dict << ", order=" << best_order
+                          << ", elapsed=" << best_time_ms << " ms" << std::endl;
+            }
+            return 1;
+        }
     } catch (const std::exception& ex) {
         std::cerr << "Exception: " << ex.what() << std::endl;
         return 1;
