@@ -13,8 +13,8 @@
 ACT::ACT(double FS, int length, const std::string& dict_addr, 
          const ParameterRanges& ranges, bool complex_mode, 
          bool force_regenerate, bool mute)
-    : FS(FS), length(length), dict_cache_file(dict_addr), param_ranges(ranges),
-      complex_mode(complex_mode), force_regenerate(force_regenerate), mute(mute), dict_size(0) {
+    : FS(FS), length(length), param_ranges(ranges), complex_mode(complex_mode), mute(mute), is_debug(false),
+      dict_cache_file(dict_addr), force_regenerate(force_regenerate), dict_size(0) {
     
     if (!mute) {
         std::cout << "\n===============================================\n";
@@ -178,7 +178,8 @@ std::pair<int, double> ACT::search_dictionary(const std::vector<double>& signal)
     return std::make_pair(best_idx, best_val);
 }
 
-ACT::TransformResult ACT::transform(const std::vector<double>& signal, int order, bool debug) {
+ACT::TransformResult ACT::transform(const std::vector<double>& signal, int order, double residual_threshold, bool debug) {
+    this->is_debug = debug;
     TransformResult result;
     result.params.resize(order, std::vector<double>(4));
     result.coeffs.resize(order);
@@ -189,46 +190,71 @@ ACT::TransformResult ACT::transform(const std::vector<double>& signal, int order
     if (debug) {
         std::cout << "Beginning " << order << "-Order Transform of Input Signal...\n";
     }
+
+    double prev_resid_norm2 = std::numeric_limits<double>::max();
     
-    for (int P = 0; P < order; ++P) {
+    for (int i = 0; i < order; ++i) {
         if (debug) std::cout << ".";
-        
+
         // Find best matching chirplet from dictionary
         auto [ind, val] = search_dictionary(result.residue);
-        
+
         // Get coarse parameters
         std::vector<double> params = param_mat[ind];
-        
+
         // Fine-tune parameters using BFGS optimization
-        std::vector<double> new_params = bfgs_optimize(params, result.residue);
-        
+        std::vector<double> refined_params = bfgs_optimize(params, result.residue);
+        if (this->is_debug) {
+            std::cout << std::fixed << std::setprecision(8);
+            std::cout << "[DEBUG] bfgs_optimize returned refined_params: "
+                      << "tc=" << refined_params[0] << ", "
+                      << "fc=" << refined_params[1] << ", "
+                      << "logDt=" << refined_params[2] << ", "
+                      << "c=" << refined_params[3] << std::endl;
+        }
+
         // Generate optimized chirplet
-        auto updated_base_chirplet = g(new_params[0], new_params[1], new_params[2], new_params[3]);
-        
+        auto updated_base_chirplet = g(refined_params[0], refined_params[1], refined_params[2], refined_params[3]);
+
         // Calculate coefficient (unit-energy atoms => LS amplitude is simple dot product)
         double updated_chirplet_coeff = inner_product(updated_base_chirplet, result.residue);
-        
+
+        // Store results for this order
+        result.params[i] = refined_params;
+        result.coeffs[i] = updated_chirplet_coeff;
+
         // Create new chirp component
         std::vector<double> new_chirp(length);
-        for (int i = 0; i < length; ++i) {
-            new_chirp[i] = updated_base_chirplet[i] * updated_chirplet_coeff;
+        for (int j = 0; j < length; ++j) {
+            new_chirp[j] = updated_base_chirplet[j] * updated_chirplet_coeff;
         }
-        
+
         // Update residue and approximation
-        for (int i = 0; i < length; ++i) {
-            result.residue[i] -= new_chirp[i];
-            result.approx[i] += new_chirp[i];
+        double resid_norm2 = 0.0;
+        for (int j = 0; j < length; ++j) {
+            result.residue[j] -= new_chirp[j];
+            result.approx[j] += new_chirp[j];
+            resid_norm2 += result.residue[j] * result.residue[j];
         }
-        
-        // Store results
-        result.params[P] = new_params;
-        result.coeffs[P] = updated_chirplet_coeff;
+        if (this->is_debug) {
+            std::cout << "[DEBUG] Residual norm2: " << resid_norm2 << std::endl;
+        }
+
+        // Check for early stopping
+        if (prev_resid_norm2 - resid_norm2 < residual_threshold) {
+            if (debug) std::cout << "Early stopping at order " << i << std::endl;
+            break;
+        }
+
+        prev_resid_norm2 = resid_norm2;
     }
     
     if (debug) std::cout << std::endl;
     
     // Calculate final error
-    result.error = std::accumulate(result.residue.begin(), result.residue.end(), 0.0);
+    double resid_norm2 = 0.0;
+    for (int j = 0; j < length; ++j) resid_norm2 += result.residue[j] * result.residue[j];
+    result.error = std::sqrt(resid_norm2); // residual L2 norm
     
     return result;
 }
@@ -372,6 +398,14 @@ void ACTOptimizer::optimization_function_with_gradient(const alglib::real_1d_arr
 
 std::vector<double> ACT::bfgs_optimize(const std::vector<double>& initial_params, 
                                       const std::vector<double>& signal) {
+    if (this->is_debug) {
+        std::cout << std::fixed << std::setprecision(8);
+        std::cout << "[DEBUG] bfgs_optimize called with coarse params: "
+                  << "tc=" << initial_params[0] << ", "
+                  << "fc=" << initial_params[1] << ", "
+                  << "logDt=" << initial_params[2] << ", "
+                  << "c=" << initial_params[3] << std::endl;
+    }
     // Store signal and instance for optimization function
     ACTOptimizer optimizer(this, signal);
     
@@ -417,15 +451,42 @@ std::vector<double> ACT::bfgs_optimize(const std::vector<double>& initial_params
             if (x[i] > bndu[i]) x[i] = bndu[i] - 1e-6;
         }
         
+        if (this->is_debug) {
+            std::cout << "[DEBUG] Initial Guess (x0): "
+                      << "tc=" << x[0] << ", "
+                      << "fc=" << x[1] << ", "
+                      << "logDt=" << x[2] << ", "
+                      << "c=" << x[3] << std::endl;
+            std::cout << "[DEBUG] Lower Bounds (bndl): "
+                      << "tc=" << bndl[0] << ", "
+                      << "fc=" << bndl[1] << ", "
+                      << "logDt=" << bndl[2] << ", "
+                      << "c=" << bndl[3] << std::endl;
+            std::cout << "[DEBUG] Upper Bounds (bndu): "
+                      << "tc=" << bndu[0] << ", "
+                      << "fc=" << bndu[1] << ", "
+                      << "logDt=" << bndu[2] << ", "
+                      << "c=" << bndu[3] << std::endl;
+        }
+
         // Create optimizer with numerical gradients (safer)
         alglib::minbccreatef(x, 1e-6, state);  // Use numerical gradients
         alglib::minbcsetbc(state, bndl, bndu);
-        alglib::minbcsetcond(state, 1e-4, 0, 0, 10);  // Relaxed conditions
+        alglib::minbcsetcond(state, 1e-5, 0, 0, 100); // Increased maxits
         alglib::minbcsetxrep(state, false);
         
         // Optimize with numerical gradients only
+        if (this->is_debug) {
+            std::cout << "[DEBUG] Starting ALGLIB optimization..." << std::endl;
+        }
         alglib::minbcoptimize(state, optimizer.optimization_function, nullptr, &optimizer);
+        if (this->is_debug) {
+            std::cout << "[DEBUG] ALGLIB optimization complete." << std::endl;
+        }
         alglib::minbcresults(state, x, rep);
+        if (this->is_debug) {
+            std::cout << "[DEBUG] ALGLIB terminationtype=" << rep.terminationtype << std::endl;
+        }
         
         // Check if optimization succeeded
         if (rep.terminationtype > 0) {
@@ -434,6 +495,10 @@ std::vector<double> ACT::bfgs_optimize(const std::vector<double>& initial_params
                 result[i] = x[i];
             }
             return result;
+        } else {
+            // Log termination type for diagnostics before falling back
+            std::cerr << "ALGLIB terminationtype=" << rep.terminationtype
+                      << ", falling back to simple optimization..." << std::endl;
         }
         
     } catch (const alglib::ap_error& e) {

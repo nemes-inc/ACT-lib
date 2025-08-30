@@ -1,0 +1,100 @@
+analyze_samples 2 10000 15
+load_csv data/muse-testdata.csv
+select 21 0 512
+params tc 0 250 10
+params fc 20 45 1
+params logDt -3 -1 0.1
+params c -5 7 0.3
+create_dictionary
+analyze_samples 2 10000 15
+load_csv data/muse-testdata.csv
+select 21 0 512
+params tc 0 250 10
+params fc 20 45 1
+params logDt -3 -1 0.1
+params c -5 7 0.3
+create_dictionary
+analyze_samples 2 10000 15
+load_csv data/muse-testdata.csv
+select 21 0 512
+params tc 0 250 10
+params fc 20 45 1
+params logDt -3 -1 0.1
+params c -5 7 0.3
+create_dictionary
+analyze_samples 2 10000 15
+load_csv data/muse-testdata.csv
+select 21 0 512
+params tc 0 250 10
+params fc 20 45 1
+params logDt -3 -1 0.1
+params c -5 7 0.3
+create_dictionary
+analyze_samples 2 10000 15
+load_csv data/muse-testdata.csv
+select 21 0 512
+params tc 0 250 10
+params fc 20 45 1
+params logDt -3 -1 0.1
+params c -5 7 0.3
+create_dictionary
+analyze_samples 2 10000 15
+load_csv data/muse-testdata.csv
+select 21 0 512
+params tc 0 250 10
+params fc 20 45 1
+params logDt -3 -1 0.1
+params c -5 7 0.3
+create_dictionary
+analyze 20
+load_csv data/muse-testdata.csv
+params tc 0 250 10
+params fc 20 45 1
+params logDt -3 -1 0.1
+params c -5 7 0.3
+create_dictionary
+select 21 0 512
+create_dictionary
+analyze 20
+load_csv data/muse-testdata.csv
+select 21 0 512
+params tc 0 250 10
+params fc 20 45 1
+params logDt -3 -1 0.1
+params c -5 7 0.3
+create_dictionary
+analyze 20
+load_csv data/muse-testdata.csv
+select 21 0 512
+params tc 0 250 10
+params fc 20 45 1
+params logDt -3 -1 0.1
+params c -5 7 0.3
+create_dictionary
+analyze 20
+load_csv data/muse-testdata.csv
+select 21 0 512
+params tc 0 250 10
+params fc 20 45 1
+params logDt -3 -1 0.1
+params c -5 7 0.3
+create_dictionary
+analyze 20
+load_csv data/muse-testdata.csv
+select 21 0 256
+params tc 0 245 5
+params fc 20 45 1
+params logDt -3 -1 0.1
+params c -5 7 0.3
+create_dictionary
+analyze 30 5
+load_csv data/muse-testdata.csv
+select 21 1000 256
+params tc 0 245 5
+params fc 4 70 3
+params logDt -3 -1 0.1
+params c -5 7 0.3
+params fc 4 70 2
+create_dictionary
+analyze 30 5
+analyze 50 5

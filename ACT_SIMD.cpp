@@ -29,6 +29,7 @@ ACT_SIMD::ACT_SIMD(double FS, int length, const std::string& dict_addr,
     }
 }
 
+
 ACT_SIMD::~ACT_SIMD() {
     cleanup_simd_memory();
 }
@@ -99,8 +100,14 @@ std::pair<int, double> ACT_SIMD::search_dictionary(const std::vector<double>& si
 double ACT_SIMD::inner_product_accelerate(const std::vector<double>& a, const std::vector<double>& b) {
 #ifdef __APPLE__
     // Apple Accelerate framework - highly optimized for Apple Silicon
+    // Ensure memory is aligned to prevent bus errors.
+    std::vector<double> aligned_a(a.size());
+    std::vector<double> aligned_b(b.size());
+    memcpy(aligned_a.data(), a.data(), a.size() * sizeof(double));
+    memcpy(aligned_b.data(), b.data(), b.size() * sizeof(double));
+
     double result;
-    vDSP_dotprD(a.data(), 1, b.data(), 1, &result, a.size());
+    vDSP_dotprD(aligned_a.data(), 1, aligned_b.data(), 1, &result, aligned_a.size());
     return result;
 #else
     // Fallback to auto-vectorized version

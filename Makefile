@@ -12,7 +12,9 @@
 
 # Compiler Configuration
 CXX = g++
-CXXFLAGS = -std=c++17 -O3 -Wall -Wextra -g -I. -Ialglib/alglib-cpp/src
+CC = gcc
+CXXFLAGS = -fsanitize=address -std=c++17 -O3 -Wall -Wextra -Wuninitialized -g -I. -Ialglib/alglib-cpp/src -Ilinenoise
+CFLAGS = -O3 -Wall -Wextra -g -I. -Ialglib/alglib-cpp/src -Ilinenoise
 LDFLAGS = -lm -pthread
 
 # Platform-specific optimizations
@@ -39,6 +41,10 @@ TEST_EEG_GAMMA_30S_SOURCES = test_eeg_gamma_30s.cpp
 TEST_SIMD_SOURCES = test_simd.cpp
 TEST_SIMD_MT_SOURCES = test_simd_multithreaded.cpp
 PROFILE_ACT_SOURCES = profile_act.cpp
+
+# Linenoise library
+LINENOISE_SOURCES = linenoise/linenoise.c
+LINENOISE_OBJECTS = $(OBJDIR)/linenoise/linenoise.o
 
 # ALGLIB Dependencies (Essential Components)
 ALGLIB_SOURCES = \
@@ -73,14 +79,17 @@ TEST_ACT_SYNTHETIC_TARGET = $(BINDIR)/test_act_synthetic
 TEST_ACT_SYNTHETIC_SIMD_TARGET = $(BINDIR)/test_act_synthetic_simd
 TEST_ACT_SYNTHETIC_MT_TARGET = $(BINDIR)/test_act_synthetic_mt
 TEST_ACT_SYNTHETIC_SIMD_MT_TARGET = $(BINDIR)/test_act_synthetic_simd_mt
+TEST_ALGLIB_DEBUG_TARGET = $(BINDIR)/test_alglib_debug
+EEG_ACT_ANALYZER_TARGET = $(BINDIR)/eeg_act_analyzer
 
 # Default target
-all: $(TEST_ACT_TARGET) $(TEST_EEG_GAMMA_8S_TARGET) $(TEST_EEG_GAMMA_30S_TARGET) $(TEST_SIMD_TARGET) $(PROFILE_ACT_TARGET) $(PROFILE_ACT_SIMD_MT_TARGET) $(TEST_ACT_SYNTHETIC_TARGET) $(TEST_ACT_SYNTHETIC_SIMD_TARGET) $(TEST_ACT_SYNTHETIC_MT_TARGET) $(TEST_ACT_SYNTHETIC_SIMD_MT_TARGET)
+all: $(TEST_ACT_TARGET) $(TEST_EEG_GAMMA_8S_TARGET) $(TEST_EEG_GAMMA_30S_TARGET) $(TEST_SIMD_TARGET) $(PROFILE_ACT_TARGET) $(PROFILE_ACT_SIMD_MT_TARGET) $(TEST_ACT_SYNTHETIC_TARGET) $(TEST_ACT_SYNTHETIC_SIMD_TARGET) $(TEST_ACT_SYNTHETIC_MT_TARGET) $(TEST_ACT_SYNTHETIC_SIMD_MT_TARGET) $(TEST_ALGLIB_DEBUG_TARGET) $(EEG_ACT_ANALYZER_TARGET)
 
 # Create directories
 $(OBJDIR):
 	@mkdir -p $(OBJDIR)
 	@mkdir -p $(OBJDIR)/alglib/alglib-cpp/src
+	@mkdir -p $(OBJDIR)/linenoise
 
 $(BINDIR):
 	@mkdir -p $(BINDIR)
@@ -89,6 +98,10 @@ $(BINDIR):
 $(OBJDIR)/%.o: %.cpp | $(OBJDIR)
 	@echo "Compiling $<..."
 	@$(CXX) $(CXXFLAGS) -c $< -o $@
+
+$(OBJDIR)/linenoise/linenoise.o: linenoise/linenoise.c | $(OBJDIR)
+	@echo "Compiling LINENOISE $<..."
+	@$(CC) $(CFLAGS) -c $< -o $@
 
 $(OBJDIR)/alglib/alglib-cpp/src/%.o: alglib/alglib-cpp/src/%.cpp | $(OBJDIR)
 	@echo "Compiling ALGLIB $<..."
@@ -155,7 +168,25 @@ $(TEST_ACT_SYNTHETIC_SIMD_MT_TARGET): $(ACT_CORE_OBJECTS) $(OBJDIR)/ACT_SIMD_Mul
 	@$(CXX) $^ -o $@ $(LDFLAGS)
 	@echo "✅ Synthetic ACT SIMD multithreaded test executable created: $@"
 
+$(TEST_ALGLIB_DEBUG_TARGET): $(ACT_CORE_OBJECTS) $(OBJDIR)/test_alglib_debug.o $(ALGLIB_OBJECTS) | $(BINDIR)
+	@echo "Linking ALGLIB debug test executable..."
+	@$(CXX) $^ -o $@ $(LDFLAGS)
+	@echo "✅ ALGLIB debug test executable created: $@"
+
+$(EEG_ACT_ANALYZER_TARGET): $(ACT_CORE_OBJECTS) $(OBJDIR)/eeg_act_analyzer.o $(ALGLIB_OBJECTS) $(LINENOISE_OBJECTS) | $(BINDIR)
+	@echo "Linking EEG ACT analyzer executable..."
+	@$(CXX) $(CXXFLAGS) $^ -o $@ $(LDFLAGS)
+	@echo "✅ EEG ACT analyzer executable created: $@"
+
+eeg-analyzer: $(EEG_ACT_ANALYZER_TARGET)
+
+eeg_act_analyzer: eeg-analyzer
+
 # Run targets
+test-alglib-debug: $(TEST_ALGLIB_DEBUG_TARGET)
+	@echo "🔬 Running ALGLIB debug test..."
+	@./$(TEST_ALGLIB_DEBUG_TARGET)
+
 test: $(TEST_ACT_TARGET)
 	@echo "🧪 Running basic ACT test..."
 	@./$(TEST_ACT_TARGET)
@@ -223,7 +254,7 @@ help:
 	@echo "  - Linux: BLAS/LAPACK libraries"
 
 # Phony targets
-.PHONY: all test eeg-8s eeg-30s simd simd-mt profile clean help
+.PHONY: all test test-alglib-debug eeg-8s eeg-30s simd simd-mt profile clean help eeg-analyzer eeg_act_analyzer
 
 # Dependency tracking
 -include $(ACT_CORE_OBJECTS:.o=.d)

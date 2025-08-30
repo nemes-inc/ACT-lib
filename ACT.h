@@ -58,6 +58,7 @@ private:
     ParameterRanges param_ranges;                 // Parameter ranges
     bool complex_mode;                            // Complex/real mode
     bool mute;                                    // Verbose output control
+    bool is_debug;                                // Debug flag for verbose logging
     
     // Dictionary matrices
     std::vector<std::vector<double>> dict_mat;    // Dictionary matrix [dict_size x length]
@@ -110,10 +111,17 @@ public:
      * Perform P-order ACT transform
      * @param signal Input signal
      * @param order Transform order (number of chirplets)
+     * @param residual_threshold Residual threshold for early stopping
      * @param debug Enable debug output
      * @return Transform result structure
      */
-    TransformResult transform(const std::vector<double>& signal, int order = 5, bool debug = false);
+    virtual TransformResult transform(const std::vector<double>& signal, int order = 5, double residual_threshold = 1e-6, bool debug = false);
+
+    /**
+     * Get dictionary length
+     * @return Dictionary length
+     */
+    virtual int get_dictionary_length() const { return length; };
 
     /**
      * Cost function for optimization (equivalent to minimize_this)

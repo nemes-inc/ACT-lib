@@ -27,11 +27,12 @@ public:
              const ParameterRanges& ranges = ParameterRanges(), 
              bool complex_mode = false, 
              bool force_regenerate = false, bool mute = true);
+    virtual ~ACT_SIMD();
 
     /**
      * Destructor
      */
-    ~ACT_SIMD();
+    //~ACT_SIMD();
 
     /**
      * SIMD-optimized dictionary search

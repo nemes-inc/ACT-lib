@@ -75,6 +75,50 @@ make eeg-30s
 make profile
 ```
 
+### Interactive EEG ACT Analyzer (CLI)
+An interactive command-line tool is included to explore EEG CSV data and run ACT over selected windows.
+
+Build the analyzer and run it:
+```bash
+# Build the analyzer (or `make all`)
+make eeg-analyzer
+
+# Run the interactive CLI
+./bin/eeg_act_analyzer
+```
+
+Example session using the included sample data `data/muse-testdata.csv` (Muse TP9, fs=256 Hz):
+```
+> load_csv data/muse-testdata.csv
+> select 1 0 2048                # column_index start_sample num_samples
+> show_params                    # view current tc/fc/logDt/c ranges and size estimate
+> params fc 25 49 1              # set frequency range (Hz)
+> params logDt -3.0 -0.7 0.3     # set log-duration grid
+> params c -15 15 3              # set chirp-rate grid (Hz/s)
+> create_dictionary              # builds dictionary for current window length
+> analyze 5 0.01                 # find top 5 chirplets, stop if residual < 0.01
+
+# Sliding-window analysis over samples with overlap
+> analyze_samples 3 4096 256     # num_chirps end_sample overlap
+> exit
+```
+
+Available commands in the CLI (`eeg_act_analyzer.cpp`):
+- `load_csv <filepath>`: Load a CSV; first row is treated as headers. Non-numeric cells become NaN.
+- `select <column_idx> <start_sample> <num_samples>`: Choose a segment. DC offset is removed. NaNs are filtered.
+- `params <tc|fc|logDt|c> <min> <max> <step>`: Adjust dictionary parameter ranges.
+- `show_params`: Print current parameter ranges and an estimated dictionary memory footprint.
+- `create_dictionary`: Construct the dictionary for the selected segment length.
+- `analyze <num_chirplets> <residual_threshold>`: Run ACT and print chirplet parameters and residuals.
+- `analyze_samples <num_chirps> <end_sample> <overlap>`: Slide a window of dictionary length across the signal.
+- `help` / `exit`.
+
+Notes:
+- Sampling frequency defaults to 256 Hz (Muse). Adjust code if your data differs.
+- `tc` is in samples; reported time is converted to seconds as `tc / fs`.
+- Duration is reported as `1000 * exp(logDt)` in milliseconds.
+- The analyzer uses `linenoise` for history; a local history file `.eeg_analyzer_history.txt` is created.
+
 ## Architecture
 
 ### Class Hierarchy
