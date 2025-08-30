@@ -1,0 +1,38 @@
+[build-system]
+requires = [
+  "scikit-build-core>=0.10",
+  "pybind11>=2.10",
+  "numpy>=1.24",
+  "setuptools",
+  "wheel"
+]
+build-backend = "scikit_build_core.build"
+
+[project]
+name = "rbf-mpem"
+version = "0.1.0"
+description = "Pybind11 bindings for ACT MPEM extraction"
+authors = [{ name = "ACT", email = "devnull@example.com" }]
+requires-python = ">=3.9"
+
+[project.optional-dependencies]
+develop = ["pytest", "numpy"]
+
+[tool.scikit-build]
+
+[tool.scikit-build.cmake]
+minimum-version = "3.20"
+build-type = "Release"
+
+[tool.cmake]
+build-type = "Release"
+
+[tool.scikit-build.wheel]
+expand-macos-universal-tags = true
+packages = ["rbf"]
+
+[tool.scikit-build.sdist]
+include = [
+  "src/**",
+  "CMakeLists.txt",
+]

@@ -1,0 +1,63 @@
+# Python subtree ignore rules
+# Virtual environments
+venv/
+.env/
+.venv/
+env/
+
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# C extensions / build artifacts
+build/
+dist/
+.eggs/
+*.egg-info/
+*.egg
+wheels/
+
+# Packaging / installer logs
+pip-log.txt
+pip-delete-this-directory.txt
+pip-wheel-metadata/
+
+# Test, coverage, and type-checking caches
+.pytest_cache/
+.coverage*
+htmlcov/
+.tox/
+.nox/
+.mypy_cache/
+.pytype/
+.ruff_cache/
+
+# Jupyter Notebook
+.ipynb_checkpoints/
+
+# Logs and runs
+logs/
+*.log
+runs/
+wandb/
+mlruns/
+
+# Data and model artifacts (do not commit large/generated files)
+data/
+datasets/
+models/
+checkpoints/
+experiments/
+outputs/
+results/
+
+# Temporary files
+*.tmp
+*.temp
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db
