@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>EEG ACT Analysis Visualizer</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.7.0/p5.js"></script>
+    <style>
+        body {
+            margin: 0;
+            padding: 20px;
+            font-family: Arial, sans-serif;
+            background-color: #f0f0f0;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+        h1 {
+            text-align: center;
+            color: #333;
+        }
+        .controls {
+            background: white;
+            padding: 15px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .control-group {
+            margin-bottom: 10px;
+        }
+        .control-group label {
+            display: inline-block;
+            width: 120px;
+        }
+        .control-group input, .control-group select {
+            padding: 5px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+        }
+        .chirplet-controls {
+            max-height: 200px;
+            overflow-y: auto;
+            border: 1px solid #ddd;
+            padding: 10px;
+            margin-top: 10px;
+        }
+        .chirplet-toggle {
+            margin: 5px 0;
+        }
+        .canvas-container {
+            background: white;
+            border-radius: 8px;
+            padding: 15px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        #info {
+            margin-top: 20px;
+            padding: 10px;
+            background: #e8f4fd;
+            border-radius: 4px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>EEG ACT Analysis Visualizer</h1>
+
+        <div class="controls">
+            <div class="control-group">
+                <label for="jsonFile">JSON File:</label>
+                <input type="file" id="jsonFile" accept=".json">
+                <button onclick="loadJSONFile()">Load Analysis</button>
+            </div>
+
+            <div class="control-group">
+                <label for="zoom">Zoom Level:</label>
+                <input type="range" id="zoom" min="0.1" max="10" step="0.1" value="1">
+                <span id="zoomValue">1.0x</span>
+            </div>
+
+            <div class="control-group">
+                <label for="panX">Pan X:</label>
+                <input type="range" id="panX" min="-1000" max="1000" step="10" value="0">
+                <span id="panXValue">0</span>
+            </div>
+
+            <div class="control-group">
+                <label for="showOriginal">Show Original:</label>
+                <input type="checkbox" id="showOriginal" checked>
+            </div>
+
+            <div class="control-group">
+                <label for="showChirplets">Show Chirplets:</label>
+                <input type="checkbox" id="showChirplets" checked>
+            </div>
+
+            <div class="control-group">
+                <label for="showReconstruction">Show Reconstruction:</label>
+                <input type="checkbox" id="showReconstruction">
+            </div>
+
+            <div class="control-group">
+                <label for="showResidual">Show Residual:</label>
+                <input type="checkbox" id="showResidual">
+            </div>
+
+            <div class="control-group">
+                <label for="showFInst">Show f_inst Overlay:</label>
+                <input type="checkbox" id="showFInst">
+            </div>
+
+            <div class="chirplet-controls">
+                <strong>Chirplet Visibility:</strong>
+                <div style="margin:6px 0;">
+                    <button type="button" onclick="showAllChirplets()">All On</button>
+                    <button type="button" onclick="hideAllChirplets()">All Off</button>
+                </div>
+                <div id="chirpletToggles"></div>
+            </div>
+        </div>
+
+        <div class="canvas-container">
+            <div id="canvas-container"></div>
+        </div>
+
+        <div id="info">
+            <strong>Analysis Info:</strong>
+            <div id="analysisInfo">No data loaded</div>
+        </div>
+    </div>
+
+    <script src="sketch.js"></script>
+</body>
+</html>

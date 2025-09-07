@@ -19,6 +19,7 @@ static int start_sample = 0;
 static ACT::ParameterRanges param_ranges;
 static std::unique_ptr<ACT_SIMD> act_analyzer;
 static double sampling_frequency = 256.0; // Default Muse sampling rate
+static std::string current_filename;
 
 // --- Forward Declarations ---
 void handle_load_csv(const std::vector<std::string>& args);
@@ -32,6 +33,17 @@ void print_signal_stats(const std::vector<double>& signal, const std::string& ti
 void print_estimated_size();
 void print_help();
 void print_current_params();
+void save_analysis_to_json(const std::string& filename, const ACT::TransformResult& result, 
+                          int num_chirplets, double residual_threshold, bool is_single = true, 
+                          int window_start = 0, int end_sample = 0, int overlap = 0, int num_chirps = 0);
+// Combined multi-window JSON saver
+void save_multiwindow_combined_to_json(
+    const std::string& filename,
+    const std::vector<ACT::TransformResult>& results,
+    const std::vector<int>& window_starts,
+    int end_sample,
+    int overlap,
+    int num_chirps);
 
 // --- Main Application Loop ---
 int main() {
@@ -96,6 +108,7 @@ void handle_load_csv(const std::vector<std::string>& args) {
     }
 
     const std::string& filename = args[0];
+    current_filename = filename; // Store filename for JSON output
     std::ifstream file(filename);
     if (!file.is_open()) {
         std::cerr << "Error: Cannot open file " << filename << std::endl;
@@ -333,14 +346,27 @@ void handle_analyze(const std::vector<std::string>& args) {
         std::cout << "Dictionary not created. Use 'create_dictionary' first." << std::endl;
         return;
     }
-    if (args.size() != 2) {
-        std::cout << "Usage: analyze <num_chirplets> <residual_threshold>" << std::endl;
+    if (args.size() != 2 && args.size() != 4) {
+        std::cout << "Usage: analyze <num_chirplets> <residual_threshold> [save <filename>]" << std::endl;
         return;
     }
 
     try {
         int num_chirplets = std::stoi(args[0]);
         double residual_threshold = std::stod(args[1]);
+        std::string save_filename = "";
+        bool do_save = false;
+
+        if (args.size() == 4) {
+            if (args[2] == "save") {
+                save_filename = args[3];
+                do_save = true;
+            } else {
+                std::cout << "Usage: analyze <num_chirplets> <residual_threshold> [save <filename>]" << std::endl;
+                return;
+            }
+        }
+
         std::cout << "\nPerforming ACT analysis to find top " << num_chirplets << " chirplets..." << std::endl;
 
         auto result = act_analyzer->transform(selected_signal, num_chirplets, residual_threshold, true);
@@ -364,6 +390,10 @@ void handle_analyze(const std::vector<std::string>& args) {
             std::cout << "  Chirp Rate: " << std::setprecision(1) << chirp_rate << " Hz/s\n";
             std::cout << "  Coefficient: " << std::setprecision(4) << coeff << std::endl;
             std::cout << "  Residual: " << std::setprecision(4) << residual << std::endl;
+        }
+
+        if (do_save) {
+            save_analysis_to_json(save_filename, result, num_chirplets, residual_threshold, true);
         }
 
 
@@ -423,8 +453,8 @@ void handle_analyze_samples(const std::vector<std::string>& args) {
         std::cout << "No signal selected. Use 'select' command first." << std::endl;
         return;
     }
-    if (args.size() != 3) {
-        std::cout << "Usage: analyze_samples <num_chirps> <end_sample> <overlap>" << std::endl;
+    if (args.size() != 3 && args.size() != 5) {
+        std::cout << "Usage: analyze_samples <num_chirps> <end_sample> <overlap> [save <filename>]" << std::endl;
         return;
     }
 
@@ -432,6 +462,18 @@ void handle_analyze_samples(const std::vector<std::string>& args) {
         int num_chirps = std::stoi(args[0]);
         int end_sample = std::stoi(args[1]);
         int overlap = std::stoi(args[2]);
+        std::string save_filename = "";
+        bool do_save = false;
+
+        if (args.size() == 5) {
+            if (args[3] == "save") {
+                save_filename = args[4];
+                do_save = true;
+            } else {
+                std::cout << "Usage: analyze_samples <num_chirps> <end_sample> <overlap> [save <filename>]" << std::endl;
+                return;
+            }
+        }
 
         int window_size = act_analyzer->get_dictionary_length();
 
@@ -448,6 +490,10 @@ void handle_analyze_samples(const std::vector<std::string>& args) {
 
         std::cout << "Starting sample-based analysis from " << start_sample << " to " << end_sample 
                   << " with window size " << window_size << " and overlap " << overlap << "..." << std::endl;
+
+        // Collect results to save a single combined JSON if requested
+        std::vector<ACT::TransformResult> collected_results;
+        std::vector<int> collected_starts;
 
         for (int current_start = start_sample; current_start + window_size <= end_sample; current_start += (window_size - overlap)) {
             std::cout << "\n[DEBUG] Processing window starting at sample " << current_start << "..." << std::endl;
@@ -480,11 +526,235 @@ void handle_analyze_samples(const std::vector<std::string>& args) {
 
             std::cout << "--- Window starting at sample " << current_start << " ---" << std::endl;
             print_analysis_results(result, current_start);
+
+            if (do_save) {
+                collected_results.push_back(result);
+                collected_starts.push_back(current_start);
+            }
+        }
+
+        // Save a single combined JSON file after processing all windows
+        if (do_save) {
+            // Compute combined file in one go
+            save_multiwindow_combined_to_json(save_filename, collected_results, collected_starts, end_sample, overlap, num_chirps);
         }
 
     } catch (const std::exception& e) {
         std::cerr << "Error parsing arguments: " << e.what() << std::endl;
     }
+}
+
+void save_analysis_to_json(const std::string& filename, const ACT::TransformResult& result, 
+                          int num_chirplets, double residual_threshold, bool is_single, 
+                          int window_start, int end_sample, int overlap, int num_chirps) {
+    std::ofstream file(filename);
+    if (!file.is_open()) {
+        std::cerr << "Error: Cannot open file " << filename << " for writing." << std::endl;
+        return;
+    }
+    // Use consistent high precision for numeric values
+    file << std::setprecision(12) << std::fixed;
+
+    file << "{\n";
+    file << "  \"source_file\": \"" << current_filename << "\",\n";
+    file << "  \"column_name\": \"" << (selected_column_index >= 0 ? csv_headers[selected_column_index] : "") << "\",\n";
+    file << "  \"column_index\": " << selected_column_index << ",\n";
+    file << "  \"start_sample\": " << start_sample << ",\n";
+    file << "  \"num_samples\": " << selected_signal.size() << ",\n";
+    file << "  \"sampling_frequency\": " << sampling_frequency << ",\n";
+    file << "  \"param_ranges\": {\n";
+    file << "    \"tc_min\": " << param_ranges.tc_min << ",\n";
+    file << "    \"tc_max\": " << param_ranges.tc_max << ",\n";
+    file << "    \"tc_step\": " << param_ranges.tc_step << ",\n";
+    file << "    \"fc_min\": " << param_ranges.fc_min << ",\n";
+    file << "    \"fc_max\": " << param_ranges.fc_max << ",\n";
+    file << "    \"fc_step\": " << param_ranges.fc_step << ",\n";
+    file << "    \"logDt_min\": " << param_ranges.logDt_min << ",\n";
+    file << "    \"logDt_max\": " << param_ranges.logDt_max << ",\n";
+    file << "    \"logDt_step\": " << param_ranges.logDt_step << ",\n";
+    file << "    \"c_min\": " << param_ranges.c_min << ",\n";
+    file << "    \"c_max\": " << param_ranges.c_max << ",\n";
+    file << "    \"c_step\": " << param_ranges.c_step << "\n";
+    file << "  },\n";
+
+    if (is_single) {
+        file << "  \"analysis_type\": \"single\",\n";
+        file << "  \"num_chirplets\": " << num_chirplets << ",\n";
+        file << "  \"residual_threshold\": " << residual_threshold << ",\n";
+        file << "  \"result\": {\n";
+        file << "    \"error\": " << result.error << ",\n";
+        file << "    \"chirplets\": [\n";
+        for (size_t i = 0; i < result.params.size(); ++i) {
+            file << "      {\n";
+            file << "        \"index\": " << (i + 1) << ",\n";
+            file << "        \"time_center_samples\": " << result.params[i][0] << ",\n";
+            file << "        \"time_center_seconds\": " << (result.params[i][0] / sampling_frequency) << ",\n";
+            file << "        \"frequency_hz\": " << result.params[i][1] << ",\n";
+            file << "        \"duration_ms\": " << (1000.0 * std::exp(result.params[i][2])) << ",\n";
+            file << "        \"chirp_rate_hz_per_s\": " << result.params[i][3] << ",\n";
+            file << "        \"coefficient\": " << result.coeffs[i] << "\n";
+            file << "      }";
+            if (i < result.params.size() - 1) file << ",";
+            file << "\n";
+        }
+        file << "    ],\n";
+        // Export approximation and residue arrays for reconstruction/validation
+        file << "    \"approx\": [\n";
+        for (size_t j = 0; j < result.approx.size(); ++j) {
+            file << "      " << result.approx[j];
+            if (j < result.approx.size() - 1) file << ",";
+            file << "\n";
+        }
+        file << "    ],\n";
+        file << "    \"residue\": [\n";
+        for (size_t j = 0; j < result.residue.size(); ++j) {
+            file << "      " << result.residue[j];
+            if (j < result.residue.size() - 1) file << ",";
+            file << "\n";
+        }
+        file << "    ]\n";
+        file << "  }\n";
+    } else {
+        file << "  \"analysis_type\": \"multi_sample\",\n";
+        file << "  \"num_chirps\": " << num_chirps << ",\n";
+        file << "  \"end_sample\": " << end_sample << ",\n";
+        file << "  \"overlap\": " << overlap << ",\n";
+        file << "  \"window_size\": " << act_analyzer->get_dictionary_length() << ",\n";
+        file << "  \"window_start\": " << window_start << ",\n";
+        file << "  \"result\": {\n";
+        file << "    \"error\": " << result.error << ",\n";
+        file << "    \"chirplets\": [\n";
+        for (size_t i = 0; i < result.params.size(); ++i) {
+            file << "      {\n";
+            file << "        \"index\": " << (i + 1) << ",\n";
+            file << "        \"time_center_samples\": " << result.params[i][0] << ",\n";
+            file << "        \"time_center_seconds\": " << (result.params[i][0] / sampling_frequency) << ",\n";
+            file << "        \"frequency_hz\": " << result.params[i][1] << ",\n";
+            file << "        \"duration_ms\": " << (1000.0 * std::exp(result.params[i][2])) << ",\n";
+            file << "        \"chirp_rate_hz_per_s\": " << result.params[i][3] << ",\n";
+            file << "        \"coefficient\": " << result.coeffs[i] << "\n";
+            file << "      }";
+            if (i < result.params.size() - 1) file << ",";
+            file << "\n";
+        }
+        file << "    ],\n";
+        // Export approximation and residue arrays for reconstruction/validation
+        file << "    \"approx\": [\n";
+        for (size_t j = 0; j < result.approx.size(); ++j) {
+            file << "      " << result.approx[j];
+            if (j < result.approx.size() - 1) file << ",";
+            file << "\n";
+        }
+        file << "    ],\n";
+        file << "    \"residue\": [\n";
+        for (size_t j = 0; j < result.residue.size(); ++j) {
+            file << "      " << result.residue[j];
+            if (j < result.residue.size() - 1) file << ",";
+            file << "\n";
+        }
+        file << "    ]\n";
+        file << "  }\n";
+    }
+
+    file << "}\n";
+
+    file.close();
+    std::cout << "Analysis results saved to " << filename << std::endl;
+}
+
+// Save all analyze_samples windows into a single combined JSON file with global time centers
+void save_multiwindow_combined_to_json(
+    const std::string& filename,
+    const std::vector<ACT::TransformResult>& results,
+    const std::vector<int>& window_starts,
+    int end_sample,
+    int overlap,
+    int num_chirps
+) {
+    if (results.size() != window_starts.size()) {
+        std::cerr << "Error: results and window_starts size mismatch." << std::endl;
+        return;
+    }
+
+    std::ofstream file(filename);
+    if (!file.is_open()) {
+        std::cerr << "Error: Cannot open file " << filename << " for writing." << std::endl;
+        return;
+    }
+    file << std::setprecision(12) << std::fixed;
+
+    int window_size = act_analyzer ? act_analyzer->get_dictionary_length() : (results.empty() ? 0 : (int)results.front().approx.size());
+    int total_len = end_sample - start_sample;
+    if (total_len < 0) total_len = 0;
+
+    file << "{\n";
+    file << "  \"source_file\": \"" << current_filename << "\",\n";
+    file << "  \"column_name\": \"" << (selected_column_index >= 0 ? csv_headers[selected_column_index] : "") << "\",\n";
+    file << "  \"column_index\": " << selected_column_index << ",\n";
+    file << "  \"start_sample\": " << start_sample << ",\n";
+    file << "  \"num_samples\": " << total_len << ",\n";
+    file << "  \"sampling_frequency\": " << sampling_frequency << "\n";
+    file << "  ,\n  \"param_ranges\": {\n";
+    file << "    \"tc_min\": " << param_ranges.tc_min << ",\n";
+    file << "    \"tc_max\": " << param_ranges.tc_max << ",\n";
+    file << "    \"tc_step\": " << param_ranges.tc_step << ",\n";
+    file << "    \"fc_min\": " << param_ranges.fc_min << ",\n";
+    file << "    \"fc_max\": " << param_ranges.fc_max << ",\n";
+    file << "    \"fc_step\": " << param_ranges.fc_step << ",\n";
+    file << "    \"logDt_min\": " << param_ranges.logDt_min << ",\n";
+    file << "    \"logDt_max\": " << param_ranges.logDt_max << ",\n";
+    file << "    \"logDt_step\": " << param_ranges.logDt_step << ",\n";
+    file << "    \"c_min\": " << param_ranges.c_min << ",\n";
+    file << "    \"c_max\": " << param_ranges.c_max << ",\n";
+    file << "    \"c_step\": " << param_ranges.c_step << "\n";
+    file << "  },\n";
+
+    file << "  \"analysis_type\": \"multi_sample_combined\",\n";
+    file << "  \"num_chirps_per_window\": " << num_chirps << ",\n";
+    file << "  \"end_sample\": " << end_sample << ",\n";
+    file << "  \"overlap\": " << overlap << ",\n";
+    file << "  \"window_size\": " << window_size << ",\n";
+    file << "  \"window_starts\": [";
+    for (size_t i = 0; i < window_starts.size(); ++i) {
+        file << window_starts[i];
+        if (i + 1 < window_starts.size()) file << ", ";
+    }
+    file << "],\n";
+
+    file << "  \"result\": {\n";
+    file << "    \"error_per_window\": [";
+    for (size_t w = 0; w < results.size(); ++w) {
+        file << results[w].error;
+        if (w + 1 < results.size()) file << ", ";
+    }
+    file << "],\n";
+
+    file << "    \"chirplets\": [\n";
+    bool first = true;
+    for (size_t w = 0; w < results.size(); ++w) {
+        const auto& res = results[w];
+        int wstart = window_starts[w];
+        for (size_t i = 0; i < res.params.size(); ++i) {
+            if (!first) file << ",\n";
+            first = false;
+            file << "      {\n";
+            file << "        \"index\": " << (i + 1) << ",\n";
+            file << "        \"time_center_samples\": " << (res.params[i][0] + wstart) << ",\n";
+            file << "        \"time_center_seconds\": " << ((res.params[i][0] + wstart) / sampling_frequency) << ",\n";
+            file << "        \"frequency_hz\": " << res.params[i][1] << ",\n";
+            file << "        \"duration_ms\": " << (1000.0 * std::exp(res.params[i][2])) << ",\n";
+            file << "        \"chirp_rate_hz_per_s\": " << res.params[i][3] << ",\n";
+            file << "        \"coefficient\": " << res.coeffs[i] << "\n";
+            file << "      }";
+        }
+    }
+    file << "\n    ]\n";
+
+    file << "  }\n";
+    file << "}\n";
+
+    file.close();
+    std::cout << "Combined analysis results saved to " << filename << std::endl;
 }
 
 void print_help() {
@@ -493,8 +763,8 @@ void print_help() {
     std::cout << "  select <column_idx> <start_sample> <num_samples>  - Select a signal segment for analysis.\n";
     std::cout << "  params <tc|fc|logDt|c> <min> <max> <step>       - Set parameter ranges for the dictionary.\n";
     std::cout << "  create_dictionary                               - Create the chirplet dictionary based on current parameters.\n";
-    std::cout << "  analyze <num_chirplets>                         - Run ACT analysis to find the top N chirplets.\n";
-    std::cout << "  analyze_samples <num_chirps> <end_sample> <overlap> - Analyze sequence of samples with overlap.\n";
+    std::cout << "  analyze <num_chirplets> <residual_threshold> [save <filename>] - Run ACT analysis to find the top N chirplets.\n";
+    std::cout << "  analyze_samples <num_chirps> <end_sample> <overlap> [save <filename>] - Analyze sequence of samples with overlap.\n";
     std::cout << "  help                                            - Show this help message.\n";
     std::cout << "  exit                                            - Exit the application.\n" << std::endl;
 }
