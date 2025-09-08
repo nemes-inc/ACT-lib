@@ -18,8 +18,16 @@ let reconstructionEnergy = 0;
 let residualEnergy = 0;
 
 function setup() {
-    canvas = createCanvas(1000, 600);
+    const holder = document.getElementById('canvas-container');
+    const w = holder ? holder.clientWidth : 1000;
+    canvas = createCanvas(w, 600);
     canvas.parent('canvas-container');
+    // Enforce visible size in case external CSS interferes
+    try {
+        canvas.style('display', 'block');
+        canvas.style('width', '100%');
+        canvas.style('height', '600px');
+    } catch(e) {}
     colorMode(HSB, 360, 100, 100);
 
     // Set up event listeners
@@ -34,6 +42,119 @@ function setup() {
     if (sres) sres.addEventListener('change', updateShowResidual);
     const sfi = document.getElementById('showFInst');
     if (sfi) sfi.addEventListener('change', updateShowFInst);
+
+    // Audio controls wiring
+    if (window.chirpletAudio) {
+        console.log('Chirplet Audio initializing...');
+        chirpletAudio.init();
+        console.log('Chirplet Audio initialized');
+
+        const volEl = document.getElementById('masterVolume');
+        const volVal = document.getElementById('masterVolumeValue');
+        if (volEl && volVal) {
+            volVal.textContent = Number(volEl.value).toFixed(2);
+            chirpletAudio.setMasterVolume(parseFloat(volEl.value));
+            volEl.addEventListener('input', () => {
+                volVal.textContent = Number(volEl.value).toFixed(2);
+                chirpletAudio.setMasterVolume(parseFloat(volEl.value));
+            });
+        }
+
+        const limEl = document.getElementById('limiterToggle');
+        if (limEl) {
+            limEl.checked = false; // default off
+            chirpletAudio.setLimiterEnabled(false);
+            limEl.addEventListener('change', () => {
+                chirpletAudio.setLimiterEnabled(limEl.checked);
+            });
+        }
+
+        const pvoEl = document.getElementById('playVisibleOnly');
+        if (pvoEl) {
+            chirpletAudio.setPlayVisibleOnly(pvoEl.checked);
+            pvoEl.addEventListener('change', () => {
+                chirpletAudio.setPlayVisibleOnly(pvoEl.checked);
+            });
+        }
+
+        const psEl = document.getElementById('pitchScale');
+        const psVal = document.getElementById('pitchScaleValue');
+        if (psEl && psVal) {
+            psVal.textContent = `${psEl.value}×`;
+            chirpletAudio.setPitchScale(parseFloat(psEl.value));
+            psEl.addEventListener('input', () => {
+                psVal.textContent = `${psEl.value}×`;
+                chirpletAudio.setPitchScale(parseFloat(psEl.value));
+            });
+        }
+
+        const ckEl = document.getElementById('coverageK');
+        const ckVal = document.getElementById('coverageKValue');
+        if (ckEl && ckVal) {
+            ckVal.textContent = Number(ckEl.value).toFixed(1);
+            chirpletAudio.setCoverageK(parseFloat(ckEl.value));
+            ckEl.addEventListener('input', () => {
+                ckVal.textContent = Number(ckEl.value).toFixed(1);
+                chirpletAudio.setCoverageK(parseFloat(ckEl.value));
+            });
+        }
+
+        // Export frequency mode (export only)
+        const efm = document.getElementById('exportFreqMode');
+        if (efm) {
+            chirpletAudio.setExportFrequencyMode(efm.value);
+            efm.addEventListener('change', () => {
+                chirpletAudio.setExportFrequencyMode(efm.value);
+            });
+        }
+
+        const playBtn = document.getElementById('playBtn');
+        const stopBtn = document.getElementById('stopBtn');
+        const exportBtn = document.getElementById('exportWavBtn');
+        if (playBtn) {
+            playBtn.addEventListener('click', async () => {
+                if (!analysisData || !csvData) {
+                    alert('Load a JSON analysis and CSV first.');
+                    return;
+                }
+                try {
+                    chirpletAudio.playFromAnalysis(analysisData, chirpletVisibility || []);
+                } catch (e) {
+                    console.error('Audio play error:', e);
+                }
+            });
+        }
+        if (stopBtn) {
+            stopBtn.addEventListener('click', () => {
+                try { chirpletAudio.stopAll(); } catch(e) {}
+            });
+        }
+        if (exportBtn) {
+            exportBtn.addEventListener('click', async () => {
+                if (!analysisData) {
+                    alert('Load a JSON analysis first.');
+                    return;
+                }
+                try {
+                    await chirpletAudio.exportWav(analysisData, chirpletVisibility || []);
+                } catch (e) {
+                    console.error('Export WAV error:', e);
+                    alert('Export failed. See console for details.');
+                }
+            });
+        }
+    }
+}
+
+function windowResized() {
+    const holder = document.getElementById('canvas-container');
+    const w = holder ? holder.clientWidth : width;
+    resizeCanvas(w, 600);
+    try {
+        // Keep style synced
+        canvas.style('width', '100%');
+        canvas.style('height', '600px');
+    } catch(e) {}
 }
 
 function draw() {
