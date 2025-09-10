@@ -16,6 +16,9 @@
     sources: [],
     isPlaying: false,
     baseStartTime: 0,
+    segmentStartSec: 0,
+    segmentDurationSec: 0,
+    scheduledStopTime: 0,
     masterVolumeVal: 0.25,
   };
 
@@ -135,6 +138,7 @@
     const base = 0.2;
     let maxEndRel = 0;
     const clampedWindows = [];
+    let latestStop = base;
     for (const { ch, i } of selected) {
       const Dt = ch.duration_ms / 1000.0;
       const tc = ch.time_center_seconds;
@@ -325,6 +329,23 @@
     Audio.isPlaying = false;
   }
 
+  function getIsPlaying() {
+    // Consider scheduled end time too
+    const ctx = getCtx();
+    if (Audio.isPlaying && Audio.scheduledStopTime && ctx.currentTime > Audio.scheduledStopTime + 0.05) {
+      Audio.isPlaying = false;
+    }
+    return !!Audio.isPlaying;
+  }
+
+  function getPlaybackPositionSec() {
+    // Returns playback position in seconds relative to the start of the analysis segment (0..segmentDurationSec)
+    const ctx = getCtx();
+    const t = Math.max(0, ctx.currentTime - (Audio.baseStartTime || 0));
+    const pos = Math.max(0, Math.min(Audio.segmentDurationSec || 0, t));
+    return pos;
+  }
+
   function makeChirpletBuffer(ch, tStart, tEnd, fsSignal, pitchScale, ctxOverride, freqMode = 'signed') {
     const ctx = ctxOverride || getCtx();
     const fsAudio = ctx.sampleRate;
@@ -479,6 +500,7 @@
     const coeffNorm = Math.sqrt(Math.max(1e-12, sumCoeff2));
 
     const base = ctx.currentTime + 0.2; // scheduling offset
+    let latestStop = base;
 
     for (const { ch, i } of selected) {
       console.log(`Playing chirplet ${i}...`);
@@ -533,10 +555,16 @@
         continue;
       }
       console.log(`Scheduled chirplet ${i} from ${t0} to ${t1}`);
-      Audio.sources.push({ source, gain: voiceGain, when, stopAt: when + buffer.duration });
+      const stopAt = when + buffer.duration;
+      if (stopAt > latestStop) latestStop = stopAt;
+      Audio.sources.push({ source, gain: voiceGain, when, stopAt });
     }
     console.log(`Scheduled ${selected.length} chirplets`);
     Audio.isPlaying = true;
+    Audio.baseStartTime = base;
+    Audio.segmentStartSec = segmentStartSec;
+    Audio.segmentDurationSec = Math.max(0, segmentEndSec - segmentStartSec);
+    Audio.scheduledStopTime = latestStop;
   }
 
   // Expose API
@@ -552,6 +580,8 @@
     playFromAnalysis,
     stopAll,
     exportWav,
+    getIsPlaying,
+    getPlaybackPositionSec,
   };
 
 })(window);

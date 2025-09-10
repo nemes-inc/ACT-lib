@@ -6,39 +6,20 @@
 #include <numeric>
 #include <iomanip>
 #include <cassert>
+#include <stdexcept>
+#include <cstdint>
+#include <cstring>
 
 // For BFGS optimization - using ALGLIB library
 #include <functional>
 
-ACT::ACT(double FS, int length, const std::string& dict_addr, 
-         const ParameterRanges& ranges, bool complex_mode, 
-         bool force_regenerate, bool mute)
-    : FS(FS), length(length), param_ranges(ranges), complex_mode(complex_mode), mute(mute), is_debug(false),
-      dict_cache_file(dict_addr), force_regenerate(force_regenerate), dict_size(0) {
-    
-    if (!mute) {
+ACT::ACT(double FS, int length, const ParameterRanges& ranges, bool complex_mode, bool verbose)
+    : FS(FS), length(length), param_ranges(ranges), complex_mode(complex_mode), verbose(verbose) {
+    if (!verbose) {
         std::cout << "\n===============================================\n";
         std::cout << "INITIALIZING ADAPTIVE CHIRPLET TRANSFORM MODULE\n";
         std::cout << "===============================================\n\n";
-    }
-
-    // Try to load cached dictionary first
-    if (!force_regenerate && load_dictionary_cache()) {
-        if (!mute) std::cout << "Found Chirplet Dictionary, Loading File...\n";
-    } else {
-        if (!mute) std::cout << "Did not find cached chirplet dictionary matrix, generating chirplet dictionary...\n\n";
-        generate_chirplet_dictionary(true);
-        if (!mute) std::cout << "\nDone Generating Chirplet Dictionary\n";
-        
-        if (!mute) std::cout << "\nCaching Generated Dictionary/Parameter Matrices...\n";
-        save_dictionary_cache();
-        if (!mute) std::cout << "Done Caching.\n";
-    }
-
-    if (!mute) {
-        std::cout << "=====================================================\n";
-        std::cout << "DONE INITIALIZING ADAPTIVE CHIRPLET TRANSFORM MODULE.\n";
-        std::cout << "=====================================================\n";
+        std::cout << "Note: Dictionary generation/loading is now manual via generate_chirplet_dictionary(), save_dictionary(), and ACT::load_dictionary().\n";
     }
 }
 
@@ -107,7 +88,7 @@ std::vector<double> ACT::g(double tc, double fc, double logDt, double c) {
     return chirplet;
 }
 
-int ACT::generate_chirplet_dictionary(bool debug) {
+int ACT::generate_chirplet_dictionary() {
     // Generate parameter value arrays
     auto tc_vals = linspace(param_ranges.tc_min, param_ranges.tc_max, param_ranges.tc_step);
     auto fc_vals = linspace(param_ranges.fc_min, param_ranges.fc_max, param_ranges.fc_step);
@@ -115,8 +96,8 @@ int ACT::generate_chirplet_dictionary(bool debug) {
     auto c_vals = linspace(param_ranges.c_min, param_ranges.c_max, param_ranges.c_step);
     
     dict_size = tc_vals.size() * fc_vals.size() * logDt_vals.size() * c_vals.size();
-    
-    if (debug) {
+
+    if (verbose) {
         std::cout << "Dictionary length: " << dict_size << std::endl;
         std::cout << "Parameter ranges:\n";
         std::cout << "  tc: " << tc_vals.size() << " values (" << param_ranges.tc_min << " to " << param_ranges.tc_max << ")\n";
@@ -133,13 +114,13 @@ int ACT::generate_chirplet_dictionary(bool debug) {
     int slow_cnt = 1;
     
     for (double tc : tc_vals) {
-        if (debug) {
+        if (verbose) {
             std::cout << "\n" << slow_cnt << "/" << tc_vals.size() << ": \t";
             slow_cnt++;
         }
         
         for (double fc : fc_vals) {
-            if (debug) std::cout << ".";
+            if (verbose) std::cout << ".";
             
             for (double logDt : logDt_vals) {
                 for (double c : c_vals) {
@@ -178,8 +159,11 @@ std::pair<int, double> ACT::search_dictionary(const std::vector<double>& signal)
     return std::make_pair(best_idx, best_val);
 }
 
-ACT::TransformResult ACT::transform(const std::vector<double>& signal, int order, double residual_threshold, bool debug) {
-    this->is_debug = debug;
+ACT::TransformResult ACT::transform(const std::vector<double>& signal, int order, double residual_threshold) {
+    // Ensure dictionary has been generated or loaded
+    if (dict_size == 0 || dict_mat.size() != static_cast<size_t>(dict_size) || param_mat.size() != static_cast<size_t>(dict_size)) {
+        throw std::runtime_error("ACT::transform called without a ready dictionary. Please call generate_chirplet_dictionary() or load a dictionary first.");
+    }
     TransformResult result;
     result.params.resize(order, std::vector<double>(4));
     result.coeffs.resize(order);
@@ -187,14 +171,14 @@ ACT::TransformResult ACT::transform(const std::vector<double>& signal, int order
     result.approx.resize(length, 0.0);
     result.residue = signal;  // Copy signal to residue
     
-    if (debug) {
+    if (verbose) {
         std::cout << "Beginning " << order << "-Order Transform of Input Signal...\n";
     }
 
     double prev_resid_norm2 = std::numeric_limits<double>::max();
     
     for (int i = 0; i < order; ++i) {
-        if (debug) std::cout << ".";
+        if (verbose) std::cout << ".";
 
         // Find best matching chirplet from dictionary
         auto [ind, val] = search_dictionary(result.residue);
@@ -204,7 +188,7 @@ ACT::TransformResult ACT::transform(const std::vector<double>& signal, int order
 
         // Fine-tune parameters using BFGS optimization
         std::vector<double> refined_params = bfgs_optimize(params, result.residue);
-        if (this->is_debug) {
+        if (verbose) {
             std::cout << std::fixed << std::setprecision(8);
             std::cout << "[DEBUG] bfgs_optimize returned refined_params: "
                       << "tc=" << refined_params[0] << ", "
@@ -236,21 +220,30 @@ ACT::TransformResult ACT::transform(const std::vector<double>& signal, int order
             result.approx[j] += new_chirp[j];
             resid_norm2 += result.residue[j] * result.residue[j];
         }
-        if (this->is_debug) {
+        if (verbose) {
             std::cout << "[DEBUG] Residual norm2: " << resid_norm2 << std::endl;
         }
 
         // Check for early stopping
         if (prev_resid_norm2 - resid_norm2 < residual_threshold) {
-            if (debug) std::cout << "Early stopping at order " << i << std::endl;
+            if (verbose) {
+                std::cout << "Early stopping at order " << i+1 << std::endl;
+                std::cout << "Residual norm2: " << resid_norm2 << std::endl;
+                std::cout << "Previous residual norm2: " << prev_resid_norm2 << std::endl;
+                std::cout << "Residual threshold: " << residual_threshold << std::endl;
+                std::cout << "Residual difference: " << prev_resid_norm2 - resid_norm2 << std::endl;
+            }
+            //resize result.params and result.coeffs to i+1
+            result.params.resize(i+1);
+            result.coeffs.resize(i+1);
             break;
         }
 
         prev_resid_norm2 = resid_norm2;
     }
     
-    if (debug) std::cout << std::endl;
-    
+    if (verbose) std::cout << std::endl;
+
     // Calculate final error
     double resid_norm2 = 0.0;
     for (int j = 0; j < length; ++j) resid_norm2 += result.residue[j] * result.residue[j];
@@ -398,7 +391,7 @@ void ACTOptimizer::optimization_function_with_gradient(const alglib::real_1d_arr
 
 std::vector<double> ACT::bfgs_optimize(const std::vector<double>& initial_params, 
                                       const std::vector<double>& signal) {
-    if (this->is_debug) {
+    if (verbose) {
         std::cout << std::fixed << std::setprecision(8);
         std::cout << "[DEBUG] bfgs_optimize called with coarse params: "
                   << "tc=" << initial_params[0] << ", "
@@ -451,7 +444,7 @@ std::vector<double> ACT::bfgs_optimize(const std::vector<double>& initial_params
             if (x[i] > bndu[i]) x[i] = bndu[i] - 1e-6;
         }
         
-        if (this->is_debug) {
+        if (verbose) {
             std::cout << "[DEBUG] Initial Guess (x0): "
                       << "tc=" << x[0] << ", "
                       << "fc=" << x[1] << ", "
@@ -476,15 +469,15 @@ std::vector<double> ACT::bfgs_optimize(const std::vector<double>& initial_params
         alglib::minbcsetxrep(state, false);
         
         // Optimize with numerical gradients only
-        if (this->is_debug) {
+        if (verbose) {
             std::cout << "[DEBUG] Starting ALGLIB optimization..." << std::endl;
         }
         alglib::minbcoptimize(state, optimizer.optimization_function, nullptr, &optimizer);
-        if (this->is_debug) {
+        if (verbose) {
             std::cout << "[DEBUG] ALGLIB optimization complete." << std::endl;
         }
         alglib::minbcresults(state, x, rep);
-        if (this->is_debug) {
+        if (verbose) {
             std::cout << "[DEBUG] ALGLIB terminationtype=" << rep.terminationtype << std::endl;
         }
         
@@ -573,42 +566,104 @@ double ACT::inner_product(const std::vector<double>& a, const std::vector<double
     return std::inner_product(a.begin(), a.end(), b.begin(), 0.0);
 }
 
-bool ACT::load_dictionary_cache() {
-    std::ifstream file(dict_cache_file, std::ios::binary);
+// New dictionary persistence API
+bool ACT::save_dictionary(const std::string& file_path) const {
+    std::ofstream file(file_path, std::ios::binary);
     if (!file.is_open()) return false;
-    
-    // Read dictionary size
-    file.read(reinterpret_cast<char*>(&dict_size), sizeof(dict_size));
-    
-    // Read dictionary matrix
-    dict_mat.resize(dict_size, std::vector<double>(length));
+
+    // Magic and version
+    const char magic[8] = {'A','C','T','D','I','C','T','\0'}; // "ACTDICT"
+    uint32_t version = 2; // v2 removes implementation name, keeps parameters + matrices
+    file.write(reinterpret_cast<const char*>(magic), sizeof(magic));
+    file.write(reinterpret_cast<const char*>(&version), sizeof(version));
+
+    // Core parameters
+    file.write(reinterpret_cast<const char*>(&FS), sizeof(FS));
+    int32_t len32 = static_cast<int32_t>(length);
+    file.write(reinterpret_cast<const char*>(&len32), sizeof(len32));
+    uint8_t complex_mode_u8 = complex_mode ? 1 : 0;
+    file.write(reinterpret_cast<const char*>(&complex_mode_u8), sizeof(complex_mode_u8));
+
+    // ParameterRanges
+    const ParameterRanges& pr = param_ranges;
+    const double pr_vals[12] = {pr.tc_min, pr.tc_max, pr.tc_step,
+                                pr.fc_min, pr.fc_max, pr.fc_step,
+                                pr.logDt_min, pr.logDt_max, pr.logDt_step,
+                                pr.c_min, pr.c_max, pr.c_step};
+    file.write(reinterpret_cast<const char*>(pr_vals), sizeof(pr_vals));
+
+    // Dictionary size and matrices
+    int32_t ds32 = static_cast<int32_t>(dict_size);
+    file.write(reinterpret_cast<const char*>(&ds32), sizeof(ds32));
+
+    // dict_mat: rows=dict_size, cols=length
     for (int i = 0; i < dict_size; ++i) {
-        file.read(reinterpret_cast<char*>(dict_mat[i].data()), length * sizeof(double));
+        if (dict_mat[i].size() != static_cast<size_t>(length)) {
+            return false;
+        }
+        file.write(reinterpret_cast<const char*>(dict_mat[i].data()), length * sizeof(double));
     }
-    
-    // Read parameter matrix
-    param_mat.resize(dict_size, std::vector<double>(4));
+
+    // param_mat: rows=dict_size, cols=4
     for (int i = 0; i < dict_size; ++i) {
-        file.read(reinterpret_cast<char*>(param_mat[i].data()), 4 * sizeof(double));
+        if (param_mat[i].size() != 4) return false;
+        file.write(reinterpret_cast<const char*>(param_mat[i].data()), 4 * sizeof(double));
     }
-    
+
     return file.good();
 }
 
-void ACT::save_dictionary_cache() {
-    std::ofstream file(dict_cache_file, std::ios::binary);
-    if (!file.is_open()) return;
-    
-    // Write dictionary size
-    file.write(reinterpret_cast<const char*>(&dict_size), sizeof(dict_size));
-    
-    // Write dictionary matrix
-    for (int i = 0; i < dict_size; ++i) {
-        file.write(reinterpret_cast<const char*>(dict_mat[i].data()), length * sizeof(double));
+// Load dictionary into an ACT instance from a binary stream. Supports v1 and v2 formats.
+bool ACT::load_dictionary_data_from_stream(std::istream& file, ACT& instance) {
+    // Check magic and version
+    char magic[8] = {0};
+    uint32_t version = 0;
+    file.read(reinterpret_cast<char*>(magic), sizeof(magic));
+    file.read(reinterpret_cast<char*>(&version), sizeof(version));
+    if (std::strncmp(magic, "ACTDICT", 7) != 0 || version < 1) {
+        return false;
     }
-    
-    // Write parameter matrix
-    for (int i = 0; i < dict_size; ++i) {
-        file.write(reinterpret_cast<const char*>(param_mat[i].data()), 4 * sizeof(double));
+
+    // Core parameters
+    double FS_read = 0.0;
+    int32_t len32 = 0;
+    uint8_t complex_u8 = 0;
+    file.read(reinterpret_cast<char*>(&FS_read), sizeof(FS_read));
+    file.read(reinterpret_cast<char*>(&len32), sizeof(len32));
+    file.read(reinterpret_cast<char*>(&complex_u8), sizeof(complex_u8));
+
+    // ParameterRanges
+    double pr_vals[12] = {0};
+    file.read(reinterpret_cast<char*>(pr_vals), sizeof(pr_vals));
+    ParameterRanges pr(
+        pr_vals[0], pr_vals[1], pr_vals[2],
+        pr_vals[3], pr_vals[4], pr_vals[5],
+        pr_vals[6], pr_vals[7], pr_vals[8],
+        pr_vals[9], pr_vals[10], pr_vals[11]
+    );
+
+    // Dictionary size
+    int32_t ds32 = 0;
+    file.read(reinterpret_cast<char*>(&ds32), sizeof(ds32));
+    if (ds32 < 0) return false;
+
+    // Populate the instance
+    instance.FS = FS_read;
+    instance.length = static_cast<int>(len32);
+    instance.complex_mode = (complex_u8 != 0);
+    instance.param_ranges = pr;
+    instance.dict_size = ds32;
+    instance.dict_mat.assign(instance.dict_size, std::vector<double>(instance.length));
+    instance.param_mat.assign(instance.dict_size, std::vector<double>(4));
+
+    // Read matrices
+    for (int i = 0; i < instance.dict_size; ++i) {
+        file.read(reinterpret_cast<char*>(instance.dict_mat[i].data()), instance.length * sizeof(double));
     }
+    for (int i = 0; i < instance.dict_size; ++i) {
+        file.read(reinterpret_cast<char*>(instance.param_mat[i].data()), 4 * sizeof(double));
+    }
+
+    return file.good();
 }
+

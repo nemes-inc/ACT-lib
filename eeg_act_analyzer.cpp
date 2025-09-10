@@ -8,6 +8,7 @@
 #include <numeric>
 #include <algorithm>
 #include <memory>
+#include <cmath>
 #include "linenoise.h"
 
 // --- Global State ---
@@ -26,6 +27,8 @@ void handle_load_csv(const std::vector<std::string>& args);
 void handle_select_data(const std::vector<std::string>& args);
 void handle_set_params(const std::vector<std::string>& args);
 void handle_create_dictionary(const std::vector<std::string>& args);
+void handle_save_dictionary(const std::vector<std::string>& args);
+void handle_load_dictionary(const std::vector<std::string>& args);
 void handle_analyze(const std::vector<std::string>& args);
 void handle_analyze_samples(const std::vector<std::string>& args);
 void print_analysis_results(const ACT::TransformResult& result, int time_offset = 0);
@@ -33,6 +36,7 @@ void print_signal_stats(const std::vector<double>& signal, const std::string& ti
 void print_estimated_size();
 void print_help();
 void print_current_params();
+void print_dict_summary();
 void save_analysis_to_json(const std::string& filename, const ACT::TransformResult& result, 
                           int num_chirplets, double residual_threshold, bool is_single = true, 
                           int window_start = 0, int end_sample = 0, int overlap = 0, int num_chirps = 0);
@@ -81,6 +85,10 @@ int main() {
             handle_set_params(args);
         } else if (command == "create_dictionary") {
             handle_create_dictionary(args);
+        } else if (command == "save_dictionary") {
+            handle_save_dictionary(args);
+        } else if (command == "load_dictionary") {
+            handle_load_dictionary(args);
         } else if (command == "analyze") {
             handle_analyze(args);
         } else if (command == "analyze_samples") {
@@ -324,21 +332,57 @@ void handle_create_dictionary(const std::vector<std::string>& /*args*/) {
         return;
     }
 
-    std::cout << "Creating dictionary..." << std::endl;
+    std::cout << "Creating dictionary in memory..." << std::endl;
     try {
         act_analyzer = std::make_unique<ACT_SIMD>(
-            sampling_frequency, 
-            selected_signal.size(), 
-            "foobar.bin", 
-            param_ranges, 
-            false, // force_recreate
-            true,  // use_simd
-            false  // verbose
+            sampling_frequency,
+            static_cast<int>(selected_signal.size()),
+            param_ranges,
+            false,  // complex_mode
+            false   // verbose
         );
-        std::cout << "Dictionary created successfully." << std::endl;
+        int size = act_analyzer->generate_chirplet_dictionary();
+        std::cout << "Dictionary created successfully. Size=" << size << std::endl;
+        print_dict_summary();
     } catch (const std::exception& e) {
         std::cerr << "Error creating dictionary: " << e.what() << std::endl;
     }
+}
+
+void handle_save_dictionary(const std::vector<std::string>& args) {
+    if (!act_analyzer) {
+        std::cout << "No dictionary in memory. Use 'create_dictionary' or 'load_dictionary' first." << std::endl;
+        return;
+    }
+    if (args.size() != 1) {
+        std::cout << "Usage: save_dictionary <filepath>" << std::endl;
+        return;
+    }
+    const std::string& path = args[0];
+    std::cout << "Saving dictionary to '" << path << "'..." << std::flush;
+    if (act_analyzer->save_dictionary(path)) {
+        std::cout << " done." << std::endl;
+    } else {
+        std::cout << " FAILED." << std::endl;
+    }
+}
+
+void handle_load_dictionary(const std::vector<std::string>& args) {
+    if (args.size() != 1) {
+        std::cout << "Usage: load_dictionary <filepath>" << std::endl;
+        return;
+    }
+    const std::string& path = args[0];
+    std::cout << "Loading dictionary from '" << path << "'..." << std::flush;
+    auto loaded = ACT::load_dictionary<ACT_SIMD>(path, false);
+    if (!loaded) {
+        std::cout << " FAILED." << std::endl;
+        std::cerr << "\nError: Could not load dictionary from file." << std::endl;
+        return;
+    }
+    act_analyzer = std::move(loaded);
+    std::cout << " done." << std::endl;
+    print_dict_summary();
 }
 
 void handle_analyze(const std::vector<std::string>& args) {
@@ -369,7 +413,7 @@ void handle_analyze(const std::vector<std::string>& args) {
 
         std::cout << "\nPerforming ACT analysis to find top " << num_chirplets << " chirplets..." << std::endl;
 
-        auto result = act_analyzer->transform(selected_signal, num_chirplets, residual_threshold, true);
+        auto result = act_analyzer->transform(selected_signal, num_chirplets, residual_threshold);
         
         std::cout << "\n--- Analysis Results ---" << std::endl;
         std::cout << "Final Error: " << result.error << std::endl;
@@ -522,7 +566,7 @@ void handle_analyze_samples(const std::vector<std::string>& args) {
             }
             std::cout << "[DEBUG]   DC offset removed. Calling transform..." << std::endl;
 
-            auto result = act_analyzer->transform(cleaned_window, num_chirps, true);
+            auto result = act_analyzer->transform(cleaned_window, num_chirps);
 
             std::cout << "--- Window starting at sample " << current_start << " ---" << std::endl;
             print_analysis_results(result, current_start);
@@ -762,10 +806,31 @@ void print_help() {
     std::cout << "  load_csv <filepath>                               - Load EEG data from a CSV file.\n";
     std::cout << "  select <column_idx> <start_sample> <num_samples>  - Select a signal segment for analysis.\n";
     std::cout << "  params <tc|fc|logDt|c> <min> <max> <step>       - Set parameter ranges for the dictionary.\n";
-    std::cout << "  create_dictionary                               - Create the chirplet dictionary based on current parameters.\n";
+    std::cout << "  create_dictionary                               - Generate a chirplet dictionary in memory.\n";
+    std::cout << "  save_dictionary <filepath>                      - Save the in-memory dictionary to a file.\n";
+    std::cout << "  load_dictionary <filepath>                      - Load a dictionary from a file and print its summary.\n";
     std::cout << "  analyze <num_chirplets> <residual_threshold> [save <filename>] - Run ACT analysis to find the top N chirplets.\n";
     std::cout << "  analyze_samples <num_chirps> <end_sample> <overlap> [save <filename>] - Analyze sequence of samples with overlap.\n";
     std::cout << "  help                                            - Show this help message.\n";
     std::cout << "  exit                                            - Exit the application.\n" << std::endl;
+}
+
+void print_dict_summary() {
+    if (!act_analyzer) {
+        std::cout << "No dictionary loaded/created." << std::endl;
+        return;
+    }
+    std::cout << "\n--- Dictionary Summary ---" << std::endl;
+    std::cout << "FS: " << act_analyzer->get_FS() << " Hz" << std::endl;
+    std::cout << "Length: " << act_analyzer->get_length() << " samples" << std::endl;
+    std::cout << "Complex mode: " << (act_analyzer->get_complex_mode() ? "true" : "false") << std::endl;
+    const auto& pr = act_analyzer->get_param_ranges();
+    std::cout << "Parameter Ranges:" << std::endl;
+    std::cout << "  tc: min=" << pr.tc_min << ", max=" << pr.tc_max << ", step=" << pr.tc_step << std::endl;
+    std::cout << "  fc: min=" << pr.fc_min << ", max=" << pr.fc_max << ", step=" << pr.fc_step << std::endl;
+    std::cout << "  logDt: min=" << pr.logDt_min << ", max=" << pr.logDt_max << ", step=" << pr.logDt_step << std::endl;
+    std::cout << "  c: min=" << pr.c_min << ", max=" << pr.c_max << ", step=" << pr.c_step << std::endl;
+    std::cout << "Dictionary size: " << act_analyzer->get_dict_size() << std::endl;
+    std::cout << "--------------------------\n";
 }
 

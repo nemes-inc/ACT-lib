@@ -89,13 +89,13 @@ int main() {
     // Initialize multi-threaded ACT
     std::cout << "\nInitializing ACT modules..." << std::endl;
     timer.start();
-    ACT_MultiThreaded act_mt(FS, SIGNAL_LENGTH, "mt_test_dict.bin", ranges, false, true, false);
+    ACT_MultiThreaded act_mt(FS, SIGNAL_LENGTH, ranges, false, false);
     double init_time = timer.elapsed_s();
     std::cout << "Multi-threaded ACT initialized in " << init_time << " s" << std::endl;
     
     // Generate dictionary (shared by both)
     timer.start();
-    int actual_dict_size = act_mt.generate_chirplet_dictionary(false);
+    int actual_dict_size = act_mt.generate_chirplet_dictionary();
     double dict_time = timer.elapsed_s();
     std::cout << "Dictionary generated in " << dict_time << " s (" << actual_dict_size << " chirplets)" << std::endl;
     
@@ -112,7 +112,7 @@ int main() {
     timer.start();
     std::vector<ACT::TransformResult> results_st;
     for (const auto& signal : test_signals) {
-        auto result = act_mt.transform(signal, TRANSFORM_ORDER, false);
+        auto result = act_mt.transform(signal, TRANSFORM_ORDER);
         results_st.push_back(result);
     }
     double time_st = timer.elapsed_s();

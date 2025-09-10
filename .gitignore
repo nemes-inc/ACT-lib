@@ -12,8 +12,14 @@ bin/
 
 # Executables
 test_act
-test_eeg_gamma*
-test_simd*
+test_eeg_gamma
+test_eeg_gamma_8s
+test_eeg_gamma_30s
+test_simd
+test_act_synthetic
+test_act_synthetic_simd
+test_act_synthetic_mt
+test_act_synthetic_simd_mt
 profile_act
 *.exe
 

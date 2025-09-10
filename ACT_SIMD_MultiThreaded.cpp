@@ -3,15 +3,13 @@
 #include <iomanip>
 #include <algorithm>
 
-ACT_SIMD_MultiThreaded::ACT_SIMD_MultiThreaded(double FS, int length, const std::string& dict_addr, 
-                                             const ParameterRanges& ranges, bool complex_mode, 
-                                             bool force_regenerate, bool mute)
-    : ACT_SIMD(FS, length, dict_addr, ranges, complex_mode, force_regenerate, mute),
+ACT_SIMD_MultiThreaded::ACT_SIMD_MultiThreaded(double FS, int length, const ParameterRanges& ranges, bool complex_mode, bool verbose)
+    : ACT_SIMD(FS, length, ranges, complex_mode, verbose),
       num_threads(std::thread::hardware_concurrency()) {
     
     if (num_threads == 0) num_threads = 4; // fallback
     
-    if (!mute) {
+    if (!verbose) {
         std::cout << "\n=== SIMD + MULTI-THREADED ACT INITIALIZATION ===" << std::endl;
         std::cout << "Hardware threads: " << std::thread::hardware_concurrency() << std::endl;
         std::cout << "Using threads: " << num_threads << std::endl;
@@ -27,11 +25,11 @@ ACT_SIMD_MultiThreaded::~ACT_SIMD_MultiThreaded() {
 
 
 std::vector<ACT::TransformResult> ACT_SIMD_MultiThreaded::transform_batch_simd_parallel(
-    const std::vector<std::vector<double>>& signals, int order, bool debug, int threads) {
+    const std::vector<std::vector<double>>& signals, int order, int threads) {
     
     if (threads <= 0) threads = num_threads;
     
-    if (debug) {
+    if (verbose) {
         std::cout << "\n" << std::string(70, '=') << std::endl;
         std::cout << "  SIMD + MULTI-THREADED BATCH PROCESSING" << std::endl;
         std::cout << std::string(70, '=') << std::endl;
@@ -46,8 +44,8 @@ std::vector<ACT::TransformResult> ACT_SIMD_MultiThreaded::transform_batch_simd_p
     
     // Launch parallel signal processing tasks with SIMD acceleration
     for (const auto& signal : signals) {
-        futures.push_back(std::async(std::launch::async, [this, signal, order, debug]() {
-            return process_signal_simd_worker(signal, order, debug);
+        futures.push_back(std::async(std::launch::async, [this, signal, order]() {
+            return process_signal_simd_worker(signal, order);
         }));
     }
     
@@ -59,7 +57,7 @@ std::vector<ACT::TransformResult> ACT_SIMD_MultiThreaded::transform_batch_simd_p
         results.push_back(future.get());
     }
     
-    if (debug) {
+    if (verbose) {
         std::cout << "\nBatch Processing Complete" << std::endl;
         std::cout << std::string(70, '=') << std::endl;
     }
@@ -68,11 +66,11 @@ std::vector<ACT::TransformResult> ACT_SIMD_MultiThreaded::transform_batch_simd_p
 }
 
 ACT::TransformResult ACT_SIMD_MultiThreaded::process_signal_simd_worker(
-    const std::vector<double>& signal, int order, bool debug) {
+    const std::vector<double>& signal, int order) {
     
     // Use the SIMD-accelerated transform from the parent class
     // This automatically uses SIMD for dictionary search
-    return transform(signal, order, debug);
+    return transform(signal, order);
 }
 
 

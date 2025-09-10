@@ -2,6 +2,30 @@
 
 A high-performance, general-purpose C++ implementation of the Adaptive Chirplet Transform for time-frequency analysis of non‑stationary signals. Suitable for audio, radar/sonar, biomedical (including EEG), and other domains. 
 
+## Current Project Status
+
+This section summarizes the current state of the repository as it is now.
+
+- __Core algorithm__: The base `ACT` implementation in `ACT.cpp/h` performs dictionary-based matching pursuit with unit-energy chirplet generation and BFGS refinement. `search_dictionary` is now virtual, enabling backend overrides.
+- __SIMD backend__: `ACT_SIMD` overrides `search_dictionary` and key primitives using Apple Accelerate (vDSP) and NEON helpers. It remains the primary CPU-optimized path for macOS/ARM.
+- __MLX backend scaffold__: `ACT_MLX` is introduced as a drop-in subclass of `ACT`.
+  - Today, it provides a fast CPU baseline by flattening the dictionary to a row‑major matrix and performing a single BLAS GEMV (`cblas_dgemv`) to compute all dot products at once. This has shown substantial reductions in dictionary search time and end-to-end transform time in profiling.
+  - It includes toggles `enable_mlx(bool)` and `use_precomputed_gemv(bool)`; with MLX disabled (default), it uses the GEMV path. MLX GPU acceleration hooks are scaffolded behind `ACT_USE_MLX` but not yet implemented.
+- __Build system__: The `Makefile` includes an optional `USE_MLX` flag and paths for future MLX C++ integration. A new test target `test_act_mlx` demonstrates the `ACT_MLX` backend and runs without requiring MLX (uses the GEMV CPU path by default).
+- __Profiling__: `profile_act.cpp` can instantiate `ACT_MLX` and measure end-to-end timings (dictionary search, full transform, SNR). Logs show when the GEMV path is used for search.
+- __CLI analyzer__: `eeg_act_analyzer` remains available for interactive exploration of CSV EEG data and ACT parameters.
+- __Web UI (p5.js)__: A simple in-browser visual workbench exists under `p5js/` (renamed display title: “ACT Analysis Workbench”).
+
+__What is not yet done__
+- MLX GPU execution (precomputed dictionary GEMV on device or tiled on-the-fly chirplet generation with on-device matvec) is not yet implemented. The C++ scaffolding and build flags are in place to add this next.
+- The base `ACT` class uses per-atom inner products for dictionary search. The GEMV acceleration is currently provided in `ACT_MLX`.
+
+__How to try the faster search today__
+- Use the `ACT_MLX` backend (CPU GEMV path by default):
+  - Instantiate `ACT_MLX`, call `generate_chirplet_dictionary()`, then run `search_dictionary(...)` or `transform(...)`.
+  - At runtime you can ensure GEMV is used by leaving MLX disabled (`enable_mlx(false)`) and keeping precomputed GEMV on (`use_precomputed_gemv(true)`, default).
+  - On macOS, the path uses the Accelerate framework; on Linux, ensure BLAS is available.
+
 ## Overview
 
 The Adaptive Chirplet Transform (ACT) is a powerful signal processing technique that decomposes signals into chirplets - Gaussian-enveloped sinusoids with time-varying frequency. This implementation provides:

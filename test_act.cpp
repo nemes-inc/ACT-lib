@@ -82,7 +82,8 @@ int main() {
         // Dictionary size: 5 × 5 × 2 × 2 = 100 chirplets
         
         std::cout << "1. Initializing ACT with small test dictionary...\n";
-        ACT act(fs, length, "test_dict_cache.bin", test_ranges, false, true, false);
+        ACT act(fs, length, test_ranges, false, true);
+        act.generate_chirplet_dictionary();
         
         std::cout << "\n2. Dictionary generated successfully!\n";
         std::cout << "   Dictionary size: " << act.get_dict_size() << " chirplets\n";
@@ -103,7 +104,7 @@ int main() {
         std::cout << "   Best match value: " << std::fixed << std::setprecision(6) << best_val << "\n";
         
         std::cout << "\n6. Performing 3-order ACT transform...\n";
-        auto result = act.transform(test_signal, 3, true);
+        auto result = act.transform(test_signal, 3);
         
         std::cout << "\n7. Transform Results:\n";
         std::cout << "   Final error: " << std::fixed << std::setprecision(6) << result.error << "\n";

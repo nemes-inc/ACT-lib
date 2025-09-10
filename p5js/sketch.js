@@ -8,8 +8,10 @@ let showChirplets = true;
 let chirpletVisibility = [];
 let signalBuffer = [];
 let chirpletBuffers = [];
+let overCanvas = false; // track whether mouse is over the canvas
 let reconstructionBuffer = [];
 let residualBuffer = [];
+let scaleFactorSignal = 1; // cached y-scale factor for drawing
 let showReconstruction = false;
 let showResidual = false;
 let showFInst = false;
@@ -28,7 +30,18 @@ function setup() {
         canvas.style('width', '100%');
         canvas.style('height', '600px');
     } catch(e) {}
+
+    // Performance tuning: lower device pixel density and FPS to reduce per-frame work
+    try { pixelDensity(1); } catch(e) {}
+    try { frameRate(30); } catch(e) {}
+
     colorMode(HSB, 360, 100, 100);
+
+    // Track pointer entering/leaving the canvas to gate drag panning
+    try {
+        canvas.mouseOver(() => { overCanvas = true; });
+        canvas.mouseOut(() => { overCanvas = false; });
+    } catch(e) {}
 
     // Set up event listeners
     document.getElementById('zoom').addEventListener('input', updateZoom);
@@ -157,6 +170,23 @@ function windowResized() {
     } catch(e) {}
 }
 
+// Compute visible sample range [start, end) for a buffer of given length under current pan/zoom
+function getVisibleRange(length) {
+    // x = (i * width / length) * zoomLevel - panX is on-screen when 0 <= x < width
+    // Solve for i: 0 <= (i * width / length) * zoomLevel - panX < width
+    // => panX <= (i * width / length) * zoomLevel < panX + width
+    // => (panX) * (length / (width * zoomLevel)) <= i < (panX + width) * (length / (width * zoomLevel))
+    const denom = (width * zoomLevel);
+    const factor = denom !== 0 ? (length / denom) : length;
+    let start = Math.floor(Math.max(0, panX * factor));
+    let end = Math.ceil(Math.min(length, (panX + width) * factor));
+    if (!isFinite(start) || !isFinite(end)) { start = 0; end = length; }
+    if (start < 0) start = 0;
+    if (end > length) end = length;
+    if (start >= end) { start = 0; end = Math.min(length, start + 1); }
+    return { start, end };
+}
+
 function draw() {
     background(255);
 
@@ -191,6 +221,9 @@ function draw() {
 
     // Draw info
     drawInfo();
+
+    // Draw playback marker if audio is playing
+    drawPlaybackMarker();
 }
 
 function drawNoDataMessage() {
@@ -220,77 +253,83 @@ function drawGrid() {
 }
 
 function drawSignal() {
-    // Calculate scale factor based on maximum amplitude to fit within canvas
-    let maxAmplitude = 0;
-    for (let val of signalBuffer) {
-        maxAmplitude = Math.max(maxAmplitude, Math.abs(val));
-    }
-    let scaleFactor = (height * 0.4) / maxAmplitude; // Use 80% of canvas height
-
     // Blue tone in HSB
     stroke(220, 80, 90);
     strokeWeight(2);
     noFill();
 
+    const { start, end } = getVisibleRange(signalBuffer.length);
+    const count = Math.max(1, end - start);
+    const maxVerts = Math.floor(width * 1.5); // decimate to ~1.5 vertices per screen pixel
+    const step = Math.max(1, Math.floor(count / maxVerts));
+
     beginShape();
-    for (let i = 0; i < signalBuffer.length; i++) {
+    for (let i = start; i < end; i += step) {
         let x = (i * width / signalBuffer.length) * zoomLevel - panX;
-        let y = height/2 - signalBuffer[i] * scaleFactor;
+        let y = height/2 - signalBuffer[i] * scaleFactorSignal;
+        vertex(x, y);
+    }
+    // ensure last point in range is drawn
+    if ((end - 1) > start) {
+        const i = end - 1;
+        let x = (i * width / signalBuffer.length) * zoomLevel - panX;
+        let y = height/2 - signalBuffer[i] * scaleFactorSignal;
         vertex(x, y);
     }
     endShape();
 }
 
 function drawReconstruction() {
-    // Use same scaling as original signal
-    let maxAmplitude = 0;
-    for (let val of signalBuffer) {
-        maxAmplitude = Math.max(maxAmplitude, Math.abs(val));
-    }
-    let scaleFactor = (height * 0.4) / maxAmplitude;
-
     stroke(120, 80, 60); // green-ish in HSB
     strokeWeight(2);
     noFill();
 
+    const { start, end } = getVisibleRange(reconstructionBuffer.length);
+    const count = Math.max(1, end - start);
+    const maxVerts = Math.floor(width * 1.5);
+    const step = Math.max(1, Math.floor(count / maxVerts));
+
     beginShape();
-    for (let i = 0; i < reconstructionBuffer.length; i++) {
+    for (let i = start; i < end; i += step) {
         let x = (i * width / reconstructionBuffer.length) * zoomLevel - panX;
-        let y = height/2 - reconstructionBuffer[i] * scaleFactor;
+        let y = height/2 - reconstructionBuffer[i] * scaleFactorSignal;
+        vertex(x, y);
+    }
+    if ((end - 1) > start) {
+        const i = end - 1;
+        let x = (i * width / reconstructionBuffer.length) * zoomLevel - panX;
+        let y = height/2 - reconstructionBuffer[i] * scaleFactorSignal;
         vertex(x, y);
     }
     endShape();
 }
 
 function drawResidual() {
-    // Use same scaling as original signal
-    let maxAmplitude = 0;
-    for (let val of signalBuffer) {
-        maxAmplitude = Math.max(maxAmplitude, Math.abs(val));
-    }
-    let scaleFactor = (height * 0.4) / maxAmplitude;
-
     stroke(0, 0, 40); // gray
     strokeWeight(1);
     noFill();
 
+    const { start, end } = getVisibleRange(residualBuffer.length);
+    const count = Math.max(1, end - start);
+    const maxVerts = Math.floor(width * 1.5);
+    const step = Math.max(1, Math.floor(count / maxVerts));
+
     beginShape();
-    for (let i = 0; i < residualBuffer.length; i++) {
+    for (let i = start; i < end; i += step) {
         let x = (i * width / residualBuffer.length) * zoomLevel - panX;
-        let y = height/2 - residualBuffer[i] * scaleFactor;
+        let y = height/2 - residualBuffer[i] * scaleFactorSignal;
+        vertex(x, y);
+    }
+    if ((end - 1) > start) {
+        const i = end - 1;
+        let x = (i * width / residualBuffer.length) * zoomLevel - panX;
+        let y = height/2 - residualBuffer[i] * scaleFactorSignal;
         vertex(x, y);
     }
     endShape();
 }
 
 function drawChirplets() {
-    // Calculate scale factor based on maximum amplitude to match original signal scaling
-    let maxAmplitude = 0;
-    for (let val of signalBuffer) {
-        maxAmplitude = Math.max(maxAmplitude, Math.abs(val));
-    }
-    let scaleFactor = (height * 0.4) / maxAmplitude; // Use same scale as original signal
-
     for (let i = 0; i < chirpletBuffers.length; i++) {
         if (!chirpletVisibility[i]) continue;
 
@@ -302,10 +341,21 @@ function drawChirplets() {
         noFill();
 
         let buffer = chirpletBuffers[i];
+        const { start, end } = getVisibleRange(buffer.length);
+        const count = Math.max(1, end - start);
+        const maxVerts = Math.floor(width * 1.2); // slightly fewer vertices for chirplets
+        const step = Math.max(1, Math.floor(count / maxVerts));
+
         beginShape();
-        for (let j = 0; j < buffer.length; j++) {
+        for (let j = start; j < end; j += step) {
             let x = (j * width / buffer.length) * zoomLevel - panX;
-            let y = height/2 - buffer[j] * scaleFactor; // Use same scale factor as original signal
+            let y = height/2 - buffer[j] * scaleFactorSignal; // Use same scale factor as original signal
+            vertex(x, y);
+        }
+        if ((end - 1) > start) {
+            const j = end - 1;
+            let x = (j * width / buffer.length) * zoomLevel - panX;
+            let y = height/2 - buffer[j] * scaleFactorSignal;
             vertex(x, y);
         }
         endShape();
@@ -351,6 +401,42 @@ function drawInfo() {
     }
 }
 
+function drawPlaybackMarker() {
+    // Requires chirpletAudio module
+    if (!window.chirpletAudio || typeof chirpletAudio.getIsPlaying !== 'function') return;
+    if (!chirpletAudio.getIsPlaying()) return;
+    if (!analysisData || !csvData || signalBuffer.length === 0) return;
+
+    const fs = analysisData.sampling_frequency || 1;
+    const posSec = chirpletAudio.getPlaybackPositionSec(); // relative to segment start
+    const posSamples = Math.max(0, Math.min(signalBuffer.length - 1, Math.round(posSec * fs)));
+
+    // Map to canvas x similar to other series
+    const x = (posSamples * width / signalBuffer.length) * zoomLevel - panX;
+
+    // Draw a red vertical line marker
+    push();
+    stroke(0, 80, 80); // red in HSB
+    strokeWeight(2);
+    line(x, 0, x, height);
+
+    // Draw small triangle at the top as a playhead indicator
+    noStroke();
+    fill(0, 80, 80);
+    const triSize = 8;
+    triangle(x - triSize, 0, x + triSize, 0, x, triSize * 1.8);
+
+    // Time label
+    const label = `${posSec.toFixed(3)} s`;
+    textAlign(CENTER, TOP);
+    textSize(11);
+    fill(0);
+    // Draw label slightly below the triangle without going off canvas
+    const tx = Math.max(25, Math.min(width - 25, x));
+    text(label, tx, triSize * 2 + 2);
+    pop();
+}
+
 function loadJSONFile() {
     const fileInput = document.getElementById('jsonFile');
     if (fileInput.files.length === 0) {
@@ -374,9 +460,23 @@ function loadJSONFile() {
     reader.readAsText(file);
 }
 
-function loadCSVFile(csvPath) {
-    // For web security, we need the CSV file to be in the same directory or use a file input
-    // For now, we'll use a file input approach
+async function loadCSVFile(csvPath) {
+    // First attempt: fetch via HTTP using relative path from project root
+    // Since index.html is served from /p5js/, prefix with '/' so 'data/...' resolves to '/data/...'
+    const url = csvPath.startsWith('/') ? csvPath : ('/' + csvPath);
+    try {
+        const resp = await fetch(url, { cache: 'no-cache' });
+        if (resp.ok) {
+            const text = await resp.text();
+            processCSVData(text);
+            return; // success
+        }
+        console.warn('Fetch CSV failed with status', resp.status, '— falling back to manual file selection.');
+    } catch (e) {
+        console.warn('Fetch CSV threw error — falling back to manual file selection.', e);
+    }
+
+    // Fallback: prompt user to select the CSV file manually
     const csvInput = document.createElement('input');
     csvInput.type = 'file';
     csvInput.accept = '.csv';
@@ -393,7 +493,7 @@ function loadCSVFile(csvPath) {
     });
 
     // Auto-trigger file selection or provide instructions
-    alert(`Please select the CSV file: ${csvPath}`);
+    alert(`Could not fetch CSV automatically. Please select the CSV file: ${csvPath}`);
     csvInput.click();
 }
 
@@ -443,6 +543,14 @@ function processCSVData(csvText) {
     const mean = sum / selectedData.length;
     signalBuffer = selectedData.map(val => val - mean);
     signalEnergy = signalBuffer.reduce((acc, v) => acc + v * v, 0);
+
+    // Compute and cache y-axis scale factor once (fit ~80% of canvas height)
+    let maxAmplitude = 0;
+    for (let v of signalBuffer) {
+        const a = Math.abs(v);
+        if (a > maxAmplitude) maxAmplitude = a;
+    }
+    scaleFactorSignal = maxAmplitude > 0 ? (height * 0.4) / maxAmplitude : 1;
 
     // Process analysis data
     processAnalysisData();
@@ -747,16 +855,21 @@ let isDragging = false;
 let lastMouseX = 0;
 
 function mousePressed() {
-    isDragging = true;
-    lastMouseX = mouseX;
+    // Only start dragging if the press started over the canvas and left button
+    if (overCanvas && (mouseButton === LEFT)) {
+        isDragging = true;
+        lastMouseX = mouseX;
+    }
 }
 
 function mouseDragged() {
     if (isDragging) {
         let deltaX = mouseX - lastMouseX;
         panX -= deltaX / zoomLevel;
-        document.getElementById('panX').value = panX;
-        document.getElementById('panXValue').textContent = panX;
+        const panSlider = document.getElementById('panX');
+        const panLabel = document.getElementById('panXValue');
+        if (panSlider) panSlider.value = panX;
+        if (panLabel) panLabel.textContent = panX;
         lastMouseX = mouseX;
     }
 }

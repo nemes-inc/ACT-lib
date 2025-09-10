@@ -5,6 +5,8 @@
 #include <complex>
 #include <string>
 #include <memory>
+#include <fstream>
+#include <istream>
 
 // ALGLIB includes for optimization
 #include "alglib/alglib-cpp/src/optimization.h"
@@ -51,32 +53,26 @@ public:
         std::vector<double> approx;               // approximation
     };
 
-private:
+protected:
     // Core parameters
     double FS;                                    // Sampling frequency
     int length;                                   // Signal length
     ParameterRanges param_ranges;                 // Parameter ranges
     bool complex_mode;                            // Complex/real mode
-    bool mute;                                    // Verbose output control
-    bool is_debug;                                // Debug flag for verbose logging
+    bool verbose;                                 // Verbose output control
     
     // Dictionary matrices
     std::vector<std::vector<double>> dict_mat;    // Dictionary matrix [dict_size x length]
     std::vector<std::vector<double>> param_mat;   // Parameter matrix [dict_size x 4]
     int dict_size;                                // Dictionary size
     
-    // Cache management
-    std::string dict_cache_file;                  // Cache file path
-    bool force_regenerate;                        // Force dictionary regeneration
-
 public:
     /**
      * Constructor - Initialize ACT with parameters
      */
-    ACT(double FS = 128, int length = 76, 
-        const std::string& dict_addr = "dict_cache.bin",
-        const ParameterRanges& ranges = ParameterRanges(),
-        bool complex_mode = false, bool force_regenerate = false, bool mute = false);
+    ACT(double FS, int length, 
+        const ParameterRanges& ranges,
+        bool complex_mode = false, bool verbose = false);
     
     /**
      * Destructor
@@ -98,14 +94,44 @@ public:
      * @param debug Enable debug output
      * @return Dictionary size
      */
-    int generate_chirplet_dictionary(bool debug = false);
+    int generate_chirplet_dictionary();
+
+    /**
+     * Save the current dictionary and all defining parameters to a file.
+     * The file contains: format header + version, FS, length, complex_mode, ParameterRanges,
+     * dictionary size, dictionary matrix and parameter matrix.
+     * @param file_path Destination file path
+     * @return true on success, false on failure
+     */
+    bool save_dictionary(const std::string& file_path) const;
+
+    /**
+     * Load a dictionary file and return a properly initialized ACT instance.
+     * The returned instance will have its parameters set and dictionary matrices loaded from the file.
+     * Usage: auto simd = ACT::load_dictionary<ACT_SIMD>(path);
+     * @param file_path Source file path
+     * @param mute Control console output for the created instance
+     * @return unique_ptr to an ACT instance on success, nullptr on failure
+     */
+    template <typename TDerived>
+    static std::unique_ptr<TDerived> load_dictionary(const std::string& file_path, bool verbose = false) {
+        std::ifstream file(file_path, std::ios::binary);
+        if (!file.is_open()) return nullptr;
+        // Create a placeholder instance; load_dictionary_data_from_stream will overwrite
+        // FS, length, complex_mode, param_ranges, dict_size, dict_mat, and param_mat
+        std::unique_ptr<TDerived> instance(new TDerived(128.0, 76, ParameterRanges(), /*complex_mode*/false, /*verbose*/verbose));
+        if (!load_dictionary_data_from_stream(file, *instance)) {
+            return nullptr;
+        }
+        return instance;
+    }
 
     /**
      * Search dictionary for best matching chirplet
      * @param signal Input signal
      * @return Pair of (best_index, best_value)
      */
-    std::pair<int, double> search_dictionary(const std::vector<double>& signal);
+    virtual std::pair<int, double> search_dictionary(const std::vector<double>& signal);
 
     /**
      * Perform P-order ACT transform
@@ -115,13 +141,15 @@ public:
      * @param debug Enable debug output
      * @return Transform result structure
      */
-    virtual TransformResult transform(const std::vector<double>& signal, int order = 5, double residual_threshold = 1e-6, bool debug = false);
+    virtual TransformResult transform(const std::vector<double>& signal, int order = 5, double residual_threshold = 1e-6);
 
     /**
      * Get dictionary length
      * @return Dictionary length
      */
     virtual int get_dictionary_length() const { return length; };
+
+    
 
     /**
      * Cost function for optimization (equivalent to minimize_this)
@@ -148,10 +176,16 @@ protected:
     std::vector<double> bfgs_optimize(const std::vector<double>& initial_params, 
                                       const std::vector<double>& signal);
     
+    /**
+     * Helper used by subclass loaders to populate an existing instance from a stream.
+     * Expects the file pointer to be at the beginning of the file.
+     * This will overwrite FS, length, complex_mode, param_ranges, dict_size, dict_mat, param_mat.
+     * Returns true on success.
+     */
+    static bool load_dictionary_data_from_stream(std::istream& in, ACT& instance);
+    
 private:
     // Internal helper functions
-    bool load_dictionary_cache();
-    void save_dictionary_cache();
     std::vector<double> linspace(double start, double end, double step);
     
     // Simple fallback optimization when ALGLIB fails

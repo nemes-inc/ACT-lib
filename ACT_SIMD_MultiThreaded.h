@@ -20,11 +20,10 @@ public:
     /**
      * Constructor - same as base ACT class
      */
-    ACT_SIMD_MultiThreaded(double FS = 256.0, int length = 512, 
-                          const std::string& dict_addr = "simd_mt_dict_cache.bin", 
-                          const ParameterRanges& ranges = ParameterRanges(), 
+    ACT_SIMD_MultiThreaded(double FS, int length, 
+                          const ParameterRanges& ranges, 
                           bool complex_mode = false, 
-                          bool force_regenerate = false, bool mute = true);
+                          bool verbose = false);
 
     /**
      * Destructor
@@ -37,13 +36,12 @@ public:
      * 
      * @param signals Vector of input signals to process
      * @param order Transform order (number of chirplets per signal)
-     * @param debug Enable debug output
      * @param threads Number of threads to use (0 = auto-detect)
      * @return Vector of transform results
      */
     std::vector<ACT::TransformResult> transform_batch_simd_parallel(
         const std::vector<std::vector<double>>& signals, 
-        int order = 5, bool debug = false, int threads = 0);
+        int order = 5, int threads = 0);
 
 
 
@@ -62,7 +60,7 @@ private:
      * Each thread processes one signal with SIMD-accelerated dictionary search
      */
     ACT::TransformResult process_signal_simd_worker(
-        const std::vector<double>& signal, int order, bool debug);
+        const std::vector<double>& signal, int order);
 };
 
 #endif // ACT_SIMD_MULTITHREADED_H

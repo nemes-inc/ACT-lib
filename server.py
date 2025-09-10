@@ -18,12 +18,15 @@ class CustomHTTPRequestHandler(http.server.SimpleHTTPRequestHandler):
         super().end_headers()
 
 def run_server(port=8000):
-    """Run the HTTP server on the specified port."""
+    """Run the HTTP server on the specified port.
 
-    # Change to the p5js directory
-    p5js_dir = Path(__file__).parent / "p5js"
-    if p5js_dir.exists():
-        os.chdir(p5js_dir)
+    We serve from the project root so relative paths in JSON (e.g., 'data/...')
+    are directly accessible via the browser. Open /p5js/index.html in your browser.
+    """
+
+    # Serve from project root (directory containing this server.py)
+    project_root = Path(__file__).parent
+    os.chdir(project_root)
 
     handler = CustomHTTPRequestHandler
 
@@ -31,7 +34,7 @@ def run_server(port=8000):
         with socketserver.TCPServer(("", port), handler) as httpd:
             print(f"🚀 Server running at http://localhost:{port}")
             print(f"📁 Serving files from: {os.getcwd()}")
-            print("📄 Open index.html in your browser to view the visualizer")
+            print("📄 Open http://localhost:%d/p5js/index.html to view the visualizer" % port)
             print("🛑 Press Ctrl+C to stop the server")
             httpd.serve_forever()
     except KeyboardInterrupt:

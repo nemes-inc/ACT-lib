@@ -3,6 +3,7 @@
 #include <iomanip>
 #include <cstring>
 #include <algorithm>
+#include <fstream>
 
 #ifdef __APPLE__
 #include <Accelerate/Accelerate.h>
@@ -12,16 +13,14 @@
 #include <arm_neon.h>
 #endif
 
-ACT_SIMD::ACT_SIMD(double FS, int length, const std::string& dict_addr, 
-                   const ParameterRanges& ranges, bool complex_mode, 
-                   bool force_regenerate, bool mute)
-    : ACT(FS, length, dict_addr, ranges, complex_mode, force_regenerate, mute),
+ACT_SIMD::ACT_SIMD(double FS, int length, const ParameterRanges& ranges, bool complex_mode, bool verbose)
+    : ACT(FS, length, ranges, complex_mode, verbose),
       has_accelerate(false), has_neon(false) {
     
     detect_simd_features();
     initialize_simd_memory();
     
-    if (!mute) {
+    if (verbose) {
         std::cout << "\n=== SIMD ACT INITIALIZATION ===" << std::endl;
         std::cout << "Apple Accelerate: " << (has_accelerate ? "✅ Available" : "❌ Not available") << std::endl;
         std::cout << "ARM NEON: " << (has_neon ? "✅ Available" : "❌ Not available") << std::endl;
@@ -99,18 +98,10 @@ std::pair<int, double> ACT_SIMD::search_dictionary(const std::vector<double>& si
 
 double ACT_SIMD::inner_product_accelerate(const std::vector<double>& a, const std::vector<double>& b) {
 #ifdef __APPLE__
-    // Apple Accelerate framework - highly optimized for Apple Silicon
-    // Ensure memory is aligned to prevent bus errors.
-    std::vector<double> aligned_a(a.size());
-    std::vector<double> aligned_b(b.size());
-    memcpy(aligned_a.data(), a.data(), a.size() * sizeof(double));
-    memcpy(aligned_b.data(), b.data(), b.size() * sizeof(double));
-
     double result;
-    vDSP_dotprD(aligned_a.data(), 1, aligned_b.data(), 1, &result, aligned_a.size());
+    vDSP_dotprD(a.data(), 1, b.data(), 1, &result, a.size());
     return result;
 #else
-    // Fallback to auto-vectorized version
     return inner_product_auto_vectorized(a, b);
 #endif
 }
