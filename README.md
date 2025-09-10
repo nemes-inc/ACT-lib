@@ -61,12 +61,6 @@ Performance notes: The heavy step is the dictionary search, which is accelerated
 - Configurable dictionary parameters
 - CSV output for analysis results
 
-### Optimizations
-- **SIMD Vectorization**: 4.5x speedup for dictionary search
-- **Multi-threading**: Up to 9.8x speedup for signal processing
-- **Memory Efficiency**: Optimized dictionary caching
-- **Platform Support**: macOS (Accelerate) and Linux (BLAS/LAPACK)
-
 ## Quick Start
 
 ### Prerequisites
@@ -78,7 +72,7 @@ Performance notes: The heavy step is the dictionary search, which is accelerated
 ```bash
 # Clone the repository
 git clone <repository-url>
-cd Adaptive_Chirplet_Transform_Cpp
+cd <repository-name>
 
 # Build all targets
 make all
@@ -87,13 +81,10 @@ make all
 make test
 ```
 
-### Running EEG Analysis
+### Running specialized tests
 ```bash
-# 8-second gamma band analysis
-make eeg-8s
-
-# 30-second gamma band analysis  
-make eeg-30s
+# SIMD performance test
+make simd
 
 # Performance profiling
 make profile
@@ -229,17 +220,17 @@ ACT::ParameterRanges ranges(0, 2047, 8.0,     // time: 0-2047, step 8
                            -10.0, 10.0, 5.0); // chirp rate: ±10 Hz/s
 
 // Initialize ACT with SIMD optimization
-ACT_SIMD act(256.0, 2048, "dict.bin", ranges);
+ACT_SIMD act(256.0, 2048, ranges);
+act.create_dictionary();
 
 // Analyze signal
 auto result = act.transform(signal, 5);  // Find top 5 chirplets
 ```
 
-### EEG Gamma Analysis
+### SIMD Optimized ACT
 ```cpp
-// Optimized parameters for EEG gamma band (25-50Hz)
-auto ranges = create_gamma_optimized_ranges(signal_length);
-ACT_SIMD act(256.0, signal_length, "eeg_dict.bin", ranges);
+ACT_SIMD act(256.0, signal_length, ranges);
+act.create_dictionary();
 
 // Perform analysis
 auto result = act.transform(eeg_signal, 10);
@@ -254,42 +245,6 @@ for (size_t i = 0; i < result.params.size(); ++i) {
 }
 ```
 
-## Test Targets
-
-| Target | Description | Use Case |
-|--------|-------------|----------|
-| `make test` | Basic ACT functionality test | Verify installation |
-| `make eeg-8s` | 8-second EEG gamma analysis | Short-term analysis |
-| `make eeg-30s` | 30-second EEG gamma analysis | Long-term analysis |
-| `make simd` | SIMD performance test | Optimization verification |
-| `make profile` | Performance profiling | Benchmarking |
-
-## Performance
-
-### Benchmarks (Apple M1 Pro)
-- **Dictionary Search**: 4.5x speedup with SIMD
-- **Multi-threading**: 9.8x speedup on 8-core system
-- **8s EEG Analysis**: ~500ms (with optimized dictionary)
-- **30s EEG Analysis**: ~1.4s (with balanced parameters)
-
-### Memory Usage
-- **8s Analysis**: ~1.3GB (high resolution dictionary)
-- **30s Analysis**: ~2.1GB (balanced resolution)
-- **Dictionary Caching**: Automatic binary serialization
-
-## EEG Applications Examples
-
-### Gamma Band Analysis Samples
-This implementation includes targeted analysis examples based on real EEG data collected with a Muse headband (single sensor, TP9 electrode). The analysis focuses on gamma oscillations (25-50Hz) with parameters optimized for this specific dataset:
-
-- **Data Source**: Muse headband EEG, TP9 sensor (left temporal)
-- **Sampling Rate**: 256 Hz
-- **Analysis Focus**: Gamma band (25-49Hz) oscillations
-- **Temporal Resolution**: 15-30ms for burst detection
-- **Duration Range**: 50-1000ms for typical gamma events
-- **Chirp Detection**: ±15 Hz/s frequency modulation
-
-### Key Findings
 Initial findings on performance using the included dataset:
 
 1. **Dictionary Resolution Impact**: Coarse temporal resolution (0.25s steps) caused artificial clustering of chirplets at signal boundaries
