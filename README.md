@@ -2,6 +2,30 @@
 
 A high-performance, general-purpose C++ implementation of the Adaptive Chirplet Transform for time-frequency analysis of non‑stationary signals. Suitable for audio, radar/sonar, biomedical (including EEG), and other domains. 
 
+## Current Project Status
+
+This section summarizes the current state of the repository as it is now.
+
+- __Core algorithm__: The base `ACT` implementation in `ACT.cpp/h` performs dictionary-based matching pursuit with unit-energy chirplet generation and BFGS refinement. `search_dictionary` is now virtual, enabling backend overrides.
+- __SIMD backend__: `ACT_SIMD` overrides `search_dictionary` and key primitives using Apple Accelerate (vDSP) and NEON helpers. It remains the primary CPU-optimized path for macOS/ARM.
+- __MLX backend scaffold__: `ACT_MLX` is introduced as a drop-in subclass of `ACT`.
+  - Today, it provides a fast CPU baseline by flattening the dictionary to a row‑major matrix and performing a single BLAS GEMV (`cblas_dgemv`) to compute all dot products at once. This has shown substantial reductions in dictionary search time and end-to-end transform time in profiling.
+  - It includes toggles `enable_mlx(bool)` and `use_precomputed_gemv(bool)`; with MLX disabled (default), it uses the GEMV path. MLX GPU acceleration hooks are scaffolded behind `ACT_USE_MLX` but not yet implemented.
+- __Build system__: The `Makefile` includes an optional `USE_MLX` flag and paths for future MLX C++ integration. A new test target `test_act_mlx` demonstrates the `ACT_MLX` backend and runs without requiring MLX (uses the GEMV CPU path by default).
+- __Profiling__: `profile_act.cpp` can instantiate `ACT_MLX` and measure end-to-end timings (dictionary search, full transform, SNR). Logs show when the GEMV path is used for search.
+- __CLI analyzer__: `eeg_act_analyzer` remains available for interactive exploration of CSV EEG data and ACT parameters.
+- __Web UI (p5.js)__: A simple in-browser visual workbench exists under `p5js/` (renamed display title: “ACT Analysis Workbench”).
+
+__What is not yet done__
+- MLX GPU execution (precomputed dictionary GEMV on device or tiled on-the-fly chirplet generation with on-device matvec) is not yet implemented. The C++ scaffolding and build flags are in place to add this next.
+- The base `ACT` class uses per-atom inner products for dictionary search. The GEMV acceleration is currently provided in `ACT_MLX`.
+
+__How to try the faster search today__
+- Use the `ACT_MLX` backend (CPU GEMV path by default):
+  - Instantiate `ACT_MLX`, call `generate_chirplet_dictionary()`, then run `search_dictionary(...)` or `transform(...)`.
+  - At runtime you can ensure GEMV is used by leaving MLX disabled (`enable_mlx(false)`) and keeping precomputed GEMV on (`use_precomputed_gemv(true)`, default).
+  - On macOS, the path uses the Accelerate framework; on Linux, ensure BLAS is available.
+
 ## Overview
 
 The Adaptive Chirplet Transform (ACT) is a powerful signal processing technique that decomposes signals into chirplets - Gaussian-enveloped sinusoids with time-varying frequency. This implementation provides:
@@ -37,12 +61,6 @@ Performance notes: The heavy step is the dictionary search, which is accelerated
 - Configurable dictionary parameters
 - CSV output for analysis results
 
-### Optimizations
-- **SIMD Vectorization**: 4.5x speedup for dictionary search
-- **Multi-threading**: Up to 9.8x speedup for signal processing
-- **Memory Efficiency**: Optimized dictionary caching
-- **Platform Support**: macOS (Accelerate) and Linux (BLAS/LAPACK)
-
 ## Quick Start
 
 ### Prerequisites
@@ -54,7 +72,7 @@ Performance notes: The heavy step is the dictionary search, which is accelerated
 ```bash
 # Clone the repository
 git clone <repository-url>
-cd Adaptive_Chirplet_Transform_Cpp
+cd <repository-name>
 
 # Build all targets
 make all
@@ -63,13 +81,10 @@ make all
 make test
 ```
 
-### Running EEG Analysis
+### Running specialized tests
 ```bash
-# 8-second gamma band analysis
-make eeg-8s
-
-# 30-second gamma band analysis  
-make eeg-30s
+# SIMD performance test
+make simd
 
 # Performance profiling
 make profile
@@ -205,17 +220,17 @@ ACT::ParameterRanges ranges(0, 2047, 8.0,     // time: 0-2047, step 8
                            -10.0, 10.0, 5.0); // chirp rate: ±10 Hz/s
 
 // Initialize ACT with SIMD optimization
-ACT_SIMD act(256.0, 2048, "dict.bin", ranges);
+ACT_SIMD act(256.0, 2048, ranges);
+act.create_dictionary();
 
 // Analyze signal
 auto result = act.transform(signal, 5);  // Find top 5 chirplets
 ```
 
-### EEG Gamma Analysis
+### SIMD Optimized ACT
 ```cpp
-// Optimized parameters for EEG gamma band (25-50Hz)
-auto ranges = create_gamma_optimized_ranges(signal_length);
-ACT_SIMD act(256.0, signal_length, "eeg_dict.bin", ranges);
+ACT_SIMD act(256.0, signal_length, ranges);
+act.create_dictionary();
 
 // Perform analysis
 auto result = act.transform(eeg_signal, 10);
@@ -230,42 +245,6 @@ for (size_t i = 0; i < result.params.size(); ++i) {
 }
 ```
 
-## Test Targets
-
-| Target | Description | Use Case |
-|--------|-------------|----------|
-| `make test` | Basic ACT functionality test | Verify installation |
-| `make eeg-8s` | 8-second EEG gamma analysis | Short-term analysis |
-| `make eeg-30s` | 30-second EEG gamma analysis | Long-term analysis |
-| `make simd` | SIMD performance test | Optimization verification |
-| `make profile` | Performance profiling | Benchmarking |
-
-## Performance
-
-### Benchmarks (Apple M1 Pro)
-- **Dictionary Search**: 4.5x speedup with SIMD
-- **Multi-threading**: 9.8x speedup on 8-core system
-- **8s EEG Analysis**: ~500ms (with optimized dictionary)
-- **30s EEG Analysis**: ~1.4s (with balanced parameters)
-
-### Memory Usage
-- **8s Analysis**: ~1.3GB (high resolution dictionary)
-- **30s Analysis**: ~2.1GB (balanced resolution)
-- **Dictionary Caching**: Automatic binary serialization
-
-## EEG Applications Examples
-
-### Gamma Band Analysis Samples
-This implementation includes targeted analysis examples based on real EEG data collected with a Muse headband (single sensor, TP9 electrode). The analysis focuses on gamma oscillations (25-50Hz) with parameters optimized for this specific dataset:
-
-- **Data Source**: Muse headband EEG, TP9 sensor (left temporal)
-- **Sampling Rate**: 256 Hz
-- **Analysis Focus**: Gamma band (25-49Hz) oscillations
-- **Temporal Resolution**: 15-30ms for burst detection
-- **Duration Range**: 50-1000ms for typical gamma events
-- **Chirp Detection**: ±15 Hz/s frequency modulation
-
-### Key Findings
 Initial findings on performance using the included dataset:
 
 1. **Dictionary Resolution Impact**: Coarse temporal resolution (0.25s steps) caused artificial clustering of chirplets at signal boundaries
@@ -302,124 +281,11 @@ Adaptive_Chirplet_Transform_Cpp/
 ├── profile_act.cpp          # Performance profiling
 ├── data/                    # Sample EEG data
 │   └── muse-testdata.csv   # Test data collected with Muse headband
-├── visualizer/              # Python visualization tools
-│   ├── visualize_eeg_gamma.py # Interactive result visualization
-│   ├── requirements.txt    # Python dependencies
-│   └── venv/               # Virtual environment (auto-created)
 ├── alglib/                  # ALGLIB numerical library
 ├── Makefile                 # Build system
 ├── .gitignore              # Git ignore rules
 └── README.md               # This file
 ```
-
-## Visualization
-
-Results can be visualized using the integrated Python visualizer:
-
-![ACT Visualizer Sample](ACT_visualizer_sample.png)
-
-### Setup
-```bash
-# Navigate to visualizer directory
-cd visualizer
-
-# Create and activate virtual environment
-python3 -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
-
-# Install dependencies
-pip install -r requirements.txt
-```
-
-### Usage
-```bash
-# Activate environment (if not already active)
-source venv/bin/activate
-
-# Visualize results
-python visualize_eeg_gamma.py --results original_8s
-python visualize_eeg_gamma.py --results original_30s
-
-# List available result files
-python visualize_eeg_gamma.py --list
-```
-
-### Features
-- Interactive time-frequency plots
-- Chirplet parameter visualization
-- Bowtie graphs for frequency modulation
-- Real-time parameter adjustment
-- Support for custom CSV result files
-
-## Example Output
-
-### 30-Second EEG Gamma Analysis
-
-Running `make eeg-30s` produces the following analysis:
-
-```
-🧠 Performing ACT analysis...
-⏱️  Analysis completed in 126395 ms
-
-================================================================================
-  ANALYSIS RESULTS
-================================================================================
-🔍 Detected 5 gamma chirplets:
-  Chirplet 1:
-    Time: 9.030 s
-    Frequency: 28.0 Hz
-    Duration: 1000 ms
-    Chirp Rate: -14.9 Hz/s
-    Coefficient: 0.0246
-
-  Chirplet 2:
-    Time: 8.344 s
-    Frequency: 28.0 Hz
-    Duration: 1000 ms
-    Chirp Rate: -14.9 Hz/s
-    Coefficient: 0.0240
-
-  [... additional chirplets ...]
-
-✅ Results saved to: eeg_gamma_results_30s.csv
-```
-
-### Visualization Output
-
-Running the Python visualizer generates comprehensive analysis:
-
-```
-================================================================================
-  EEG GAMMA ANALYSIS SUMMARY
-================================================================================
-📊 Dataset: Muse EEG (TP9 channel)
-⏱️  Duration: 30.00 seconds
-🔍 Detected Chirplets: 5
-🌊 Frequency Range: 27.4 - 28.2 Hz
-📈 Mean Frequency: 27.9 Hz
-⏰ Time Range: 8.34 - 9.03 seconds
-🎯 Activity Span: 0.69 seconds
-⏳ Duration Range: 1000 - 1000 ms
-📏 Mean Duration: 1000 ms
-📊 Chirp Rate Range: -15.1 to -14.1 Hz/s
-🎵 Freq Start Range: 34.6 - 35.7 Hz
-🎶 Freq End Range: 20.3 - 21.1 Hz
-
-💡 Neurophysiological Insights:
-   • All activity in Low Gamma band (cognitive processing)
-   • Strong frequency modulation indicates dynamic neural oscillations
-   • Temporal clustering suggests specific neural event around 8-9s
-   • Sustained oscillations (~1s) indicate attention/processing activity
-================================================================================
-```
-
-The visualizer then opens an interactive plot showing:
-- **Time-frequency analysis** with detected chirplets highlighted
-- **Parameter visualization** with detailed chirplet information
-- **Bowtie frequency modulation graph** showing chirp patterns
-- **Interactive controls** for exploring the analysis results
-
-## Research Background
 
 ### Background
 

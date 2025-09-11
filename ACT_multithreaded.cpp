@@ -3,10 +3,8 @@
 #include <iostream>
 #include <chrono>
 
-ACT_MultiThreaded::ACT_MultiThreaded(double FS, int length, const std::string& dict_addr, 
-                                   const ParameterRanges& ranges, bool complex_mode, 
-                                   bool force_regenerate, bool mute)
-    : ACT(FS, length, dict_addr, ranges, complex_mode, force_regenerate, mute),
+ACT_MultiThreaded::ACT_MultiThreaded(double FS, int length, const ParameterRanges& ranges, bool complex_mode, bool verbose)
+    : ACT(FS, length, ranges, complex_mode, verbose),
       num_threads(std::thread::hardware_concurrency()) {
     if (num_threads == 0) num_threads = 4; // fallback
 }

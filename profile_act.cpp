@@ -1,10 +1,14 @@
 #include "ACT.h"
+#include "ACT_SIMD.h"
+#include "ACT_MLX.h"
 #include <iostream>
 #include <chrono>
 #include <vector>
 #include <random>
 #include <iomanip>
 #include <cmath>
+
+#define ACT_USE_MLX
 
 class Timer {
 private:
@@ -78,7 +82,7 @@ int main() {
     
     // EEG-typical parameters
     const double FS = 256.0;           // 256 Hz sampling rate (typical for EEG)
-    const int SIGNAL_LENGTH = 1024;   // 4 seconds of data
+    const int SIGNAL_LENGTH = 512;   // 2 seconds of data
     const int TRANSFORM_ORDER = 10;   // Higher order for detailed analysis
     
     std::cout << "Configuration:" << std::endl;
@@ -90,9 +94,9 @@ int main() {
     // Define EEG-appropriate parameter ranges
     ACT::ParameterRanges eeg_ranges(
         0, SIGNAL_LENGTH-1, 16,    // tc: time center (64 values)
-        0.5, 50.0, 0.5,           // fc: 0.5-50 Hz (100 values, covers EEG spectrum)
-        -4.0, -1.0, 0.2,          // logDt: duration range (16 values)
-        -20.0, 20.0, 2.0          // c: chirp rate (21 values)
+        0.5, 20.0, 1,           // fc: 0.5-50 Hz (100 values, covers EEG spectrum)
+        -1.9, -0.10, 0.08,          // logDt: duration range (16 values)
+        -20.0, 20.0, 1.0          // c: chirp rate (21 values)
     );
     
     // Calculate expected dictionary size
@@ -112,13 +116,14 @@ int main() {
     
     // Initialize ACT with profiling
     timer.start();
-    ACT act(FS, SIGNAL_LENGTH, "eeg_profile_dict.bin", eeg_ranges, false, true, false);
+    ACT_MLX act(FS, SIGNAL_LENGTH, eeg_ranges, false, true);
+    act.enable_mlx(false);
     double init_time = timer.elapsed_ms();
     print_timing("ACT Initialization", init_time);
     
     // Generate dictionary
     timer.start();
-    int actual_dict_size = act.generate_chirplet_dictionary(false);
+    int actual_dict_size = act.generate_chirplet_dictionary();
     double dict_gen_time = timer.elapsed_s();
     print_timing("Dictionary Generation", dict_gen_time * 1000, 
                  std::to_string(actual_dict_size) + " chirplets");

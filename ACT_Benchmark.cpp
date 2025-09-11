@@ -23,7 +23,7 @@ void ACT_Benchmark::benchmark_simd_inner_products(ACT_SIMD& simd_act,
     std::cout << std::string(60, '-') << std::endl;
     
     // Benchmark scalar implementation (base ACT class)
-    ACT base_act(simd_act.get_FS(), simd_act.get_length());
+    ACT base_act(simd_act.get_FS(), simd_act.get_length(), simd_act.get_param_ranges(), false, false);
     auto start = std::chrono::high_resolution_clock::now();
     volatile double result_scalar = 0.0;
     for (int i = 0; i < iterations; ++i) {
@@ -119,8 +119,18 @@ void ACT_Benchmark::benchmark_combined_performance(const std::vector<std::vector
     std::cout << "  Max threads to test: " << max_threads << std::endl;
     std::cout << std::string(80, '-') << std::endl;
     
-    // Create SIMD + Multi-threaded ACT instance
-    ACT_SIMD_MultiThreaded simd_mt_act(256.0, signals.empty() ? 512 : signals[0].size());
+    // Create parameter ranges
+    double fs = 256.0;
+    int length = signals.empty() ? 512 : static_cast<int>(signals[0].size());
+    ACT::ParameterRanges ranges;
+    ranges.tc_min = 0; ranges.tc_max = length-1; ranges.tc_step = (length-1)/15.0;
+    ranges.fc_min = 5; ranges.fc_max = 25; ranges.fc_step = 2.0;
+    ranges.logDt_min = -3; ranges.logDt_max = -1; ranges.logDt_step = 0.5;
+    ranges.c_min = -10; ranges.c_max = 10; ranges.c_step = 5.0;
+
+    // Create SIMD + Multi-threaded ACT instance and generate dictionary
+    ACT_SIMD_MultiThreaded simd_mt_act(fs, length, ranges, false, false);
+    simd_mt_act.generate_chirplet_dictionary();
     std::cout << "  Dictionary size: " << simd_mt_act.get_dict_size() << " chirplets" << std::endl;
     
     // Benchmark single-threaded SIMD baseline
@@ -129,7 +139,7 @@ void ACT_Benchmark::benchmark_combined_performance(const std::vector<std::vector
     
     std::vector<ACT::TransformResult> baseline_results;
     for (const auto& signal : signals) {
-        baseline_results.push_back(simd_mt_act.transform(signal, order, false));
+        baseline_results.push_back(simd_mt_act.transform(signal, order));
     }
     
     auto end = std::chrono::high_resolution_clock::now();
@@ -164,7 +174,7 @@ void ACT_Benchmark::benchmark_combined_performance(const std::vector<std::vector
         std::cout << "\n🧵 Testing with " << threads << " threads..." << std::endl;
         
         start = std::chrono::high_resolution_clock::now();
-        auto mt_results = simd_mt_act.transform_batch_simd_parallel(signals, order, false, threads);
+        auto mt_results = simd_mt_act.transform_batch_simd_parallel(signals, order, threads);
         end = std::chrono::high_resolution_clock::now();
         
         auto mt_duration = std::chrono::duration_cast<std::chrono::nanoseconds>(end - start);
@@ -257,12 +267,13 @@ void ACT_Benchmark::compare_all_implementations(const std::vector<std::vector<do
     
     // 1. Base ACT (scalar, single-threaded)
     std::cout << "\n🔄 Testing Base ACT (scalar, single-threaded)..." << std::endl;
-    ACT base_act(fs, length, "base_comparison_dict.bin", ranges, false, false, true);
+    ACT base_act(fs, length, ranges, false, false);
+    base_act.generate_chirplet_dictionary();
     
     auto start = std::chrono::high_resolution_clock::now();
     std::vector<ACT::TransformResult> base_results;
     for (const auto& signal : signals) {
-        base_results.push_back(base_act.transform(signal, order, false));
+        base_results.push_back(base_act.transform(signal, order));
     }
     auto end = std::chrono::high_resolution_clock::now();
     auto base_duration = std::chrono::duration_cast<std::chrono::nanoseconds>(end - start);
@@ -279,12 +290,13 @@ void ACT_Benchmark::compare_all_implementations(const std::vector<std::vector<do
     
     // 2. SIMD ACT (vectorized, single-threaded)
     std::cout << "\n🚀 Testing SIMD ACT (vectorized, single-threaded)..." << std::endl;
-    ACT_SIMD simd_act(fs, length, "simd_comparison_dict.bin", ranges, false, false, true);
+    ACT_SIMD simd_act(fs, length, ranges, false, false);
+    simd_act.generate_chirplet_dictionary();
     
     start = std::chrono::high_resolution_clock::now();
     std::vector<ACT::TransformResult> simd_results;
     for (const auto& signal : signals) {
-        simd_results.push_back(simd_act.transform(signal, order, false));
+        simd_results.push_back(simd_act.transform(signal, order));
     }
     end = std::chrono::high_resolution_clock::now();
     auto simd_duration = std::chrono::duration_cast<std::chrono::nanoseconds>(end - start);
@@ -303,7 +315,8 @@ void ACT_Benchmark::compare_all_implementations(const std::vector<std::vector<do
     
     // 3. Multi-threaded ACT (scalar, parallel)
     std::cout << "\n🧵 Testing Multi-threaded ACT (scalar, parallel)..." << std::endl;
-    ACT_MultiThreaded mt_act(fs, length, "mt_comparison_dict.bin", ranges, false, false, true);
+    ACT_MultiThreaded mt_act(fs, length, ranges, false, false);
+    mt_act.generate_chirplet_dictionary();
     
     start = std::chrono::high_resolution_clock::now();
     auto mt_results = mt_act.transform_batch_parallel(signals, order, false, threads);
@@ -324,10 +337,11 @@ void ACT_Benchmark::compare_all_implementations(const std::vector<std::vector<do
     
     // 4. SIMD + Multi-threaded ACT (vectorized, parallel) - THE CHAMPION!
     std::cout << "\n🏆 Testing SIMD + Multi-threaded ACT (vectorized, parallel)..." << std::endl;
-    ACT_SIMD_MultiThreaded simd_mt_act(fs, length, "simd_mt_comparison_dict.bin", ranges, false, false, true);
+    ACT_SIMD_MultiThreaded simd_mt_act(fs, length, ranges, false, false);
+    simd_mt_act.generate_chirplet_dictionary();
     
     start = std::chrono::high_resolution_clock::now();
-    auto simd_mt_results = simd_mt_act.transform_batch_simd_parallel(signals, order, false, threads);
+    auto simd_mt_results = simd_mt_act.transform_batch_simd_parallel(signals, order, threads);
     end = std::chrono::high_resolution_clock::now();
     auto simd_mt_duration = std::chrono::duration_cast<std::chrono::nanoseconds>(end - start);
     double simd_mt_time = simd_mt_duration.count() / 1e9;

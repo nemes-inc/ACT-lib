@@ -22,11 +22,9 @@ public:
     /**
      * Constructor - same as base ACT class
      */
-    ACT_SIMD(double FS = 256.0, int length = 512, 
-             const std::string& dict_addr = "simd_dict_cache.bin", 
-             const ParameterRanges& ranges = ParameterRanges(), 
-             bool complex_mode = false, 
-             bool force_regenerate = false, bool mute = true);
+    ACT_SIMD(double FS, int length, 
+             const ParameterRanges& ranges,
+             bool complex_mode = false, bool verbose = false);
     virtual ~ACT_SIMD();
 
     /**
@@ -39,10 +37,11 @@ public:
      * @param signal Input signal
      * @return Pair of (best_index, best_value)
      */
-    std::pair<int, double> search_dictionary(const std::vector<double>& signal);
+    std::pair<int, double> search_dictionary(const std::vector<double>& signal) override;
 
-
-
+    
+    
+    
 protected:
     /**
      * SIMD-optimized inner product using Apple Accelerate framework

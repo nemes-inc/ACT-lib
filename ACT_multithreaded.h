@@ -16,11 +16,7 @@ public:
     /**
      * Constructor - same as base ACT class
      */
-    ACT_MultiThreaded(double FS = 256.0, int length = 512, 
-                     const std::string& dict_addr = "mt_dict_cache.bin", 
-                     const ParameterRanges& ranges = ParameterRanges(), 
-                     bool complex_mode = false, 
-                     bool force_regenerate = false, bool mute = true);
+    ACT_MultiThreaded(double FS, int length, const ParameterRanges& ranges, bool complex_mode, bool verbose);
 
     /**
      * Process multiple signals in parallel - the main benefit of multi-threading
