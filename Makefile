@@ -31,10 +31,11 @@ OBJDIR = obj
 BINDIR = bin
 
 # Core ACT Sources
-ACT_CORE_SOURCES = ACT.cpp ACT_SIMD.cpp ACT_SIMD_MultiThreaded.cpp ACT_multithreaded.cpp ACT_Benchmark.cpp ACT_MLX.cpp
+ACT_CORE_SOURCES = ACT.cpp ACT_CPU.cpp ACT_SIMD.cpp ACT_SIMD_MultiThreaded.cpp ACT_multithreaded.cpp ACT_Benchmark.cpp ACT_MLX.cpp
 
 # Test Sources
 TEST_ACT_SOURCES = test_act.cpp
+TEST_ACT_CPU_SOURCES = test_act_cpu.cpp
 TEST_EEG_GAMMA_SOURCES = test_eeg_gamma.cpp
 TEST_EEG_GAMMA_8S_SOURCES = test_eeg_gamma_8s.cpp
 TEST_EEG_GAMMA_30S_SOURCES = test_eeg_gamma_30s.cpp
@@ -81,6 +82,7 @@ endif
 
 # Executables
 TEST_ACT_TARGET = $(BINDIR)/test_act
+TEST_ACT_CPU_TARGET = $(BINDIR)/test_act_cpu
 TEST_EEG_GAMMA_TARGET = $(BINDIR)/test_eeg_gamma
 TEST_EEG_GAMMA_8S_TARGET = $(BINDIR)/test_eeg_gamma_8s
 TEST_EEG_GAMMA_30S_TARGET = $(BINDIR)/test_eeg_gamma_30s
@@ -98,7 +100,7 @@ EEG_ACT_ANALYZER_TARGET = $(BINDIR)/eeg_act_analyzer
 TEST_DICT_IO_TARGET = $(BINDIR)/test_dict_io
 
 # Default target
-all: $(TEST_ACT_TARGET) $(TEST_EEG_GAMMA_8S_TARGET) $(TEST_EEG_GAMMA_30S_TARGET) $(TEST_SIMD_TARGET) $(PROFILE_ACT_TARGET) $(PROFILE_ACT_SIMD_MT_TARGET) $(TEST_ACT_SYNTHETIC_TARGET) $(TEST_ACT_SYNTHETIC_SIMD_TARGET) $(TEST_ACT_SYNTHETIC_MT_TARGET) $(TEST_ACT_SYNTHETIC_SIMD_MT_TARGET) $(TEST_ALGLIB_DEBUG_TARGET) $(EEG_ACT_ANALYZER_TARGET) $(TEST_DICT_IO_TARGET) $(TEST_ACT_MLX_TARGET)
+all: $(TEST_ACT_TARGET) $(TEST_ACT_CPU_TARGET) $(TEST_EEG_GAMMA_8S_TARGET) $(TEST_EEG_GAMMA_30S_TARGET) $(TEST_SIMD_TARGET) $(PROFILE_ACT_TARGET) $(PROFILE_ACT_SIMD_MT_TARGET) $(TEST_ACT_SYNTHETIC_TARGET) $(TEST_ACT_SYNTHETIC_SIMD_TARGET) $(TEST_ACT_SYNTHETIC_MT_TARGET) $(TEST_ACT_SYNTHETIC_SIMD_MT_TARGET) $(TEST_ALGLIB_DEBUG_TARGET) $(EEG_ACT_ANALYZER_TARGET) $(TEST_DICT_IO_TARGET) $(TEST_ACT_MLX_TARGET)
 
 # Create directories
 $(OBJDIR):
@@ -127,6 +129,11 @@ $(TEST_ACT_TARGET): $(ACT_CORE_OBJECTS) $(OBJDIR)/test_act.o $(ALGLIB_OBJECTS) |
 	@echo "Linking ACT test executable..."
 	@$(CXX) $^ -o $@ $(LDFLAGS)
 	@echo "✅ ACT test executable created: $@"
+
+$(TEST_ACT_CPU_TARGET): $(ACT_CORE_OBJECTS) $(OBJDIR)/test_act_cpu.o $(ALGLIB_OBJECTS) | $(BINDIR)
+	@echo "Linking ACT_CPU test executable..."
+	@$(CXX) $^ -o $@ $(LDFLAGS)
+	@echo "✅ ACT_CPU test executable created: $@"
 
 $(TEST_EEG_GAMMA_TARGET): $(ACT_CORE_OBJECTS) $(OBJDIR)/test_eeg_gamma.o $(ALGLIB_OBJECTS) | $(BINDIR)
 	@echo "Linking EEG gamma analysis executable..."
@@ -224,6 +231,10 @@ test: $(TEST_ACT_TARGET)
 	@echo "🧪 Running basic ACT test..."
 	@./$(TEST_ACT_TARGET)
 
+test-cpu: $(TEST_ACT_CPU_TARGET)
+	@echo "🧪 Running ACT_CPU test..."
+	@./$(TEST_ACT_CPU_TARGET)
+
 eeg-8s: $(TEST_EEG_GAMMA_8S_TARGET)
 	@echo "🧠 Running 8-second EEG gamma analysis..."
 	@./$(TEST_EEG_GAMMA_8S_TARGET)
@@ -261,6 +272,7 @@ help:
 	@echo "Build Targets:"
 	@echo "  all          - Build all executables"
 	@echo "  test-act     - Build basic ACT test"
+	@echo "  test-cpu     - Build ACT_CPU test"
 	@echo "  eeg-8s       - Build 8-second EEG analysis"
 	@echo "  eeg-30s      - Build 30-second EEG analysis"
 	@echo "  simd         - Build SIMD performance test"

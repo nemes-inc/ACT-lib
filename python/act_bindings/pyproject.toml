@@ -9,9 +9,9 @@ requires = [
 build-backend = "scikit_build_core.build"
 
 [project]
-name = "rbf-mpem"
+name = "pyact"
 version = "0.1.0"
-description = "Pybind11 bindings for ACT MPEM extraction"
+description = "PyACT: Python bindings for Adaptive Chirplet Transform (MP-BFGS)"
 authors = [{ name = "ACT", email = "devnull@example.com" }]
 requires-python = ">=3.9"
 
@@ -29,10 +29,11 @@ build-type = "Release"
 
 [tool.scikit-build.wheel]
 expand-macos-universal-tags = true
-packages = ["rbf"]
+packages = ["pyact"]
 
 [tool.scikit-build.sdist]
 include = [
   "src/**",
   "CMakeLists.txt",
+  "pyact/**",
 ]

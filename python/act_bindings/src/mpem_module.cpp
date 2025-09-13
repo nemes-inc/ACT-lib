@@ -104,8 +104,27 @@ public:
               bool mute = true, std::string dict_cache_file = "dict_cache.bin")
         : fs_(fs), length_(length) {
         ACT::ParameterRanges r = parse_ranges(ranges, fs, length);
-        act_ = std::make_unique<ACT>(fs, length, dict_cache_file, r,
-                                     complex_mode, force_regenerate, mute);
+        const bool verbose = !mute;
+
+        // Try to load dictionary from cache if not forcing regeneration
+        if (!force_regenerate && !dict_cache_file.empty()) {
+            auto loaded = ACT::load_dictionary<ACT>(dict_cache_file, verbose);
+            if (loaded) {
+                act_ = std::move(loaded);
+                // Sync interface state with loaded dictionary
+                fs_ = act_->get_FS();
+                length_ = act_->get_length();
+            }
+        }
+
+        // If not loaded, create a new ACT, generate dictionary, and optionally save it
+        if (!act_) {
+            act_ = std::make_unique<ACT>(fs, length, r, complex_mode, verbose);
+            act_->generate_chirplet_dictionary();
+            if (!dict_cache_file.empty()) {
+                act_->save_dictionary(dict_cache_file);
+            }
+        }
     }
 
     py::dict transform(py::array_t<double, py::array::c_style | py::array::forcecast> signal,
@@ -123,50 +142,46 @@ public:
         }
         const double* ptr = static_cast<const double*>(info.ptr);
         std::vector<double> sig_vec(ptr, ptr + n);
-        ACT::TransformResult tr = act_->transform(sig_vec, order, debug);
+        ACT::TransformResult tr = act_->transform(sig_vec, order);
 
+        // Build full result dictionary
         py::dict out;
-        if (tr.params.empty() || tr.coeffs.empty()) {
-            out["frequency"] = py::float_(NAN);
-            out["chirp_rate"] = py::float_(NAN);
-            out["amplitude"] = py::float_(NAN);
-            out["duration"] = py::float_(NAN);
-            out["time_center"] = py::float_(NAN);
-            out["spectral_width"] = py::float_(NAN);
-            return out;
-        }
-        const std::vector<double>& p = tr.params[0];
-        if (p.size() < 4) {
-            out["frequency"] = py::float_(NAN);
-            out["chirp_rate"] = py::float_(NAN);
-            out["amplitude"] = py::float_(NAN);
-            out["duration"] = py::float_(NAN);
-            out["time_center"] = py::float_(NAN);
-            out["spectral_width"] = py::float_(NAN);
-            return out;
-        }
-
-        const double tc_samples = p[0];
-        const double fc = p[1];
-        const double logDt = p[2];
-        const double c = p[3];
-        const double coeff = tr.coeffs[0];
-
-        const double Dt = std::exp(logDt);
-        const double spec_w = 1.0 / (2.0 * kPI * std::max(Dt, 1e-12));
-
-        out["frequency"] = py::float_(fc);
-        out["chirp_rate"] = py::float_(c);
-        out["amplitude"] = py::float_(std::fabs(coeff));
-        out["duration"] = py::float_(Dt);
-        out["time_center"] = py::float_(tc_samples / fs_);
-        out["spectral_width"] = py::float_(spec_w);
-
+        out["params"]  = py::cast(tr.params);   // list[list[tc, fc, logDt, c]]
+        out["coeffs"]  = py::cast(tr.coeffs);   // list[float]
+        out["error"]   = py::float_(tr.error);  // float
+        out["signal"]  = py::cast(tr.signal);   // list[float]
+        out["approx"]  = py::cast(tr.approx);   // list[float]
+        out["residue"] = py::cast(tr.residue);  // list[float]
         return out;
     }
 
     double fs() const { return fs_; }
     int length() const { return length_; }
+
+    py::dict dict_info() const {
+        py::dict out;
+        out["fs"] = py::float_(fs_);
+        out["length"] = py::int_(length_);
+        if (act_) {
+            const auto& pr = act_->get_param_ranges();
+            py::dict ranges;
+            ranges["tc_min"] = pr.tc_min;
+            ranges["tc_max"] = pr.tc_max;
+            ranges["tc_step"] = pr.tc_step;
+            ranges["fc_min"] = pr.fc_min;
+            ranges["fc_max"] = pr.fc_max;
+            ranges["fc_step"] = pr.fc_step;
+            ranges["logDt_min"] = pr.logDt_min;
+            ranges["logDt_max"] = pr.logDt_max;
+            ranges["logDt_step"] = pr.logDt_step;
+            ranges["c_min"] = pr.c_min;
+            ranges["c_max"] = pr.c_max;
+            ranges["c_step"] = pr.c_step;
+            out["param_ranges"] = ranges;
+            out["dict_size"] = py::int_(act_->get_dict_size());
+        }
+        return out;
+    }
 
 private:
     double fs_;
@@ -177,8 +192,8 @@ private:
 
 } // namespace
 
-PYBIND11_MODULE(mpem, m) {
-    m.doc() = "Pybind11 bindings for ACT MPEM extraction";
+PYBIND11_MODULE(mpbfgs, m) {
+    m.doc() = "Pybind11 bindings for ACT MP-BFGS extraction";
     py::class_<ActEngine>(m, "ActEngine")
         .def(py::init<double, int, py::object, bool, bool, bool, std::string>(),
              py::arg("fs"),
@@ -195,5 +210,7 @@ PYBIND11_MODULE(mpem, m) {
              "Run ACT transform and return top-1 chirplet parameters.",
              py::call_guard<py::scoped_ostream_redirect, py::scoped_estream_redirect>())
         .def_property_readonly("fs", &ActEngine::fs)
-        .def_property_readonly("length", &ActEngine::length);
+        .def_property_readonly("length", &ActEngine::length)
+        .def("dict_info", &ActEngine::dict_info,
+             "Return dictionary metadata: fs, length, param_ranges, dict_size");
 }

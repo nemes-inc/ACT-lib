@@ -19,7 +19,6 @@ ACT::ACT(double FS, int length, const ParameterRanges& ranges, bool complex_mode
         std::cout << "\n===============================================\n";
         std::cout << "INITIALIZING ADAPTIVE CHIRPLET TRANSFORM MODULE\n";
         std::cout << "===============================================\n\n";
-        std::cout << "Note: Dictionary generation/loading is now manual via generate_chirplet_dictionary(), save_dictionary(), and ACT::load_dictionary().\n";
     }
 }
 

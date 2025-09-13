@@ -1,6 +1,6 @@
 import pytest
 import numpy as np
-from rbf.mpem import ActEngine
+from pyact.mpbfgs import ActEngine
 
 FS = 256.0
 LENGTH = 512
