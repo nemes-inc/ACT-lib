@@ -1,109 +1,153 @@
 #include "ACT_MLX.h"
-#include "ACT.h"
 
 #include <iostream>
 #include <limits>
 #include <algorithm>
+#include <type_traits>
 
 #ifdef __APPLE__
 #include <Accelerate/Accelerate.h>
 #endif
 
-// Future MLX includes will be guarded by ACT_USE_MLX
-// #ifdef ACT_USE_MLX
-// #include <mlx/...>  // MLX C++ headers TBD
-// #endif
-
-ACT_MLX::ACT_MLX(double FS,
+template <typename Scalar>
+ACT_MLX_T<Scalar>::ACT_MLX_T(double FS,
                  int length,
                  const ParameterRanges& ranges,
-                 bool complex_mode,
                  bool verbose)
-    : ACT(FS, length, ranges, complex_mode, verbose),
-      use_mlx(false),
-      tile_size(16384) { // reasonable default, will be tuned
-}
-
-void ACT_MLX::ensure_flattened_dictionary() {
-    if (dict_flat_ready) return;
-    const int M = get_dict_size();
-    const int N = get_length();
-    dict_flat.assign(static_cast<size_t>(M) * static_cast<size_t>(N), 0.0);
-    const auto &dict = get_dict_mat();
-    for (int i = 0; i < M; ++i) {
-        const double *row = dict[i].data();
-        std::copy(row, row + N, dict_flat.begin() + static_cast<size_t>(i) * N);
+    : Base(FS, length, ranges, verbose) {
+    if (verbose) {
+        std::cout << "\n===============================================\n";
+        std::cout << "INITIALIZING ACT_MLX\n";
+        std::cout << "===============================================\n";
+        std::cout << "[ACT_MLX] MLX search is enabled for float32 when USE_MLX=1; double falls back to Accelerate CPU path" << std::endl;
+        std::cout << std::endl;
     }
-    dict_flat_ready = true;
 }
 
-std::pair<int, double> ACT_MLX::search_dictionary(const std::vector<double>& signal) {
-    // If runtime flag disabled, just call base implementation
-    if (!use_mlx) {
-        // CPU fallback path with optional GEMV acceleration
-        if (prefer_gemv) {
-            ensure_flattened_dictionary();
+template <typename Scalar>
+ACT_MLX_T<Scalar>::ACT_MLX_T(double FS,
+                 int length,
+                 const ACT::ParameterRanges& ranges,
+                 bool verbose)
+    : ACT_MLX_T(
+        FS,
+        length,
+        ParameterRanges(
+            ranges.tc_min, ranges.tc_max, ranges.tc_step,
+            ranges.fc_min, ranges.fc_max, ranges.fc_step,
+            ranges.logDt_min, ranges.logDt_max, ranges.logDt_step,
+            ranges.c_min, ranges.c_max, ranges.c_step
+        ),
+        verbose
+      ) {}
 
-#ifdef __APPLE__
-            if (verbose) {
-                std::cout << "[ACT_MLX] Using GEMV for dictionary search\n";
-            }
-            const int M = get_dict_size();
-            const int N = get_length();
-            if (scores_buffer.size() != static_cast<size_t>(M)) {
-                scores_buffer.assign(M, 0.0);
-            }
 
-            // y = A @ x (row-major). A: MxN, x: Nx1, y: Mx1
-            cblas_dgemv(CblasRowMajor, CblasNoTrans,
-                        M, N,
-                        1.0,
-                        dict_flat.data(), N,
-                        signal.data(), 1,
-                        0.0,
-                        scores_buffer.data(), 1);
+template <typename Scalar>
+std::pair<int, Scalar> ACT_MLX_T<Scalar>::search_dictionary(const Eigen::Ref<const act::VecX<Scalar>>& signal) const {
+    if (this->get_dict_size() == 0) return {0, Scalar(0)};
 
-            // Argmax
-            int best_idx = 0;
-            double best_val = -std::numeric_limits<double>::infinity();
-            for (int i = 0; i < M; ++i) {
-                double v = scores_buffer[i];
-                if (v > best_val) { best_val = v; best_idx = i; }
-            }
-            return {best_idx, best_val};
-#else
-            // Non-Apple fallback: simple loop
-            const auto &dict = get_dict_mat();
-            int best_idx = 0;
-            double best_val = -std::numeric_limits<double>::infinity();
-            for (int i = 0; i < get_dict_size(); ++i) {
-                // std::inner_product
-                double sum = 0.0;
-                const auto &row = dict[i];
-                for (int j = 0; j < get_length(); ++j) sum += row[j] * signal[j];
-                if (sum > best_val) { best_val = sum; best_idx = i; }
-            }
-            return {best_idx, best_val};
+#ifdef USE_MLX
+    // Only enable MLX fast path for float precision
+    if constexpr (std::is_same_v<Scalar, float>) {
+        // Lazily ensure MLX dictionary is available
+        ensure_mlx_dict();
+
+        const int m = this->get_length();
+        const int n = this->get_dict_size();
+
+        // Upload signal as float32 1D array
+        std::vector<float> x_host(m);
+        for (int i = 0; i < m; ++i) x_host[i] = static_cast<float>(signal[i]);
+        mx::array x_arr(x_host.data(), mx::Shape{m}, mx::float32);
+
+        // scores = A^T x, where A is (m x n) row-major on device
+        // Compute via matmul(transpose(A), x)
+        auto scores = mx::matmul(mx::transpose(*dict_gpu_), x_arr); // shape {n}
+
+        // Argmax and best value
+        auto idx_arr = mx::argmax(scores);
+        int best_idx = idx_arr.template item<int>();
+        auto best_val_arr = mx::take(scores, best_idx);
+        float best_val_f = best_val_arr.template item<float>();
+        return {best_idx, static_cast<Scalar>(best_val_f)};
+    }
 #endif
-        }
+    // Fallback: CPU (Accelerate) path
+    return Base::search_dictionary(signal);
+}
 
-        // Fall back to base class scalar search
-        return ACT::search_dictionary(signal);
+// MLX helpers (only compiled when USE_MLX is enabled)
+#ifdef USE_MLX
+template <typename Scalar>
+void ACT_MLX_T<Scalar>::ensure_mlx_dict() const {
+    // Only meaningful for float specialization
+    if constexpr (!std::is_same_v<Scalar, float>) {
+        return;
+    }
+    const int m = this->get_length();
+    const int n = this->get_dict_size();
+
+    bool need_pack = !mlx_ready_ || !dict_gpu_ || dict_gpu_->shape(0) != m || dict_gpu_->shape(1) != n;
+    if (!need_pack) return;
+
+    // Pack Eigen column-major dict_mat (m x n) into row-major float buffer [m * n]
+    dict_rowmajor_.assign(static_cast<size_t>(m) * static_cast<size_t>(n), 0.0f);
+    const auto& A = this->get_dict_mat();
+    for (int i = 0; i < m; ++i) {
+        float* row_ptr = dict_rowmajor_.data() + static_cast<size_t>(i) * static_cast<size_t>(n);
+        for (int j = 0; j < n; ++j) {
+            row_ptr[j] = static_cast<float>(A(i, j));
+        }
     }
 
-#ifdef ACT_USE_MLX
-    // TODO: Implement MLX-accelerated search (tiled on-the-fly generation or precomputed GEMV)
-    // Placeholder: fall back for now so we can land the skeleton safely
-    return ACT::search_dictionary(signal);
-#else
-    // Compiled without MLX; warn once and fall back
-    static bool warned = false;
-    if (!warned) {
-        if (verbose) {
-            std::cerr << "[ACT_MLX] Built without ACT_USE_MLX. Falling back to CPU search_dictionary.\n";
-        }
-        warned = true;
+    // Upload to MLX device array (row-major)
+    dict_gpu_.reset(new mx::array(dict_rowmajor_.data(), mx::Shape{m, n}, mx::float32));
+    mlx_ready_ = true;
+}
+#endif
+
+template <typename Scalar>
+int ACT_MLX_T<Scalar>::generate_chirplet_dictionary() {
+    // Build using the Accelerate/Eigen base implementation
+    int n = Base::generate_chirplet_dictionary();
+
+#ifdef USE_MLX
+    // For float32, pre-pack dictionary and warm up kernels so first search is fast
+    if constexpr (std::is_same_v<Scalar, float>) {
+        // Ensure device dictionary is ready
+        ensure_mlx_dict();
+
+        // Warm up: run a dummy matmul/argmax to trigger compilation + placement
+        const int m = this->get_length();
+        auto x0 = mx::zeros(mx::Shape{m}); // float32 by default
+        auto scores = mx::matmul(mx::transpose(*dict_gpu_), x0);
+        auto idx = mx::argmax(scores);
+        // Force evaluation to complete warmup
+        (void)idx.template item<int>();
     }
-    return ACT::search_dictionary(signal);
+#endif
+    return n;
+}
+
+template <typename Scalar>
+void ACT_MLX_T<Scalar>::on_dictionary_loaded() {
+#ifdef USE_MLX
+    // For float32, pre-pack dictionary and warm up kernels so first search is fast
+    if constexpr (std::is_same_v<Scalar, float>) {
+        // Ensure device dictionary is ready
+        ensure_mlx_dict();
+
+        // Warm up: run a dummy matmul/argmax to trigger compilation + placement
+        const int m = this->get_length();
+        auto x0 = mx::zeros(mx::Shape{m}); // float32 by default
+        auto scores = mx::matmul(mx::transpose(*dict_gpu_), x0);
+        auto idx = mx::argmax(scores);
+        // Force evaluation to complete warmup
+        (void)idx.template item<int>();
+    }
 #endif
 }
+
+// Explicit instantiation for double (default alias) and float
+template class ACT_MLX_T<double>;
+template class ACT_MLX_T<float>;

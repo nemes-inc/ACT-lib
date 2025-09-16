@@ -77,7 +77,7 @@ public:
     /**
      * Destructor
      */
-    ~ACT();
+    virtual ~ACT();
 
     /**
      * Generate a single chirplet (equivalent to Python g() method)

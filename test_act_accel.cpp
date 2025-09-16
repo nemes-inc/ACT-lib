@@ -1,4 +1,4 @@
-#include "ACT_CPU.h"
+#include "ACT_Accelerate.h"
 #include <iostream>
 #include <vector>
 #include <cmath>
@@ -35,7 +35,7 @@ static std::vector<double> generate_test_signal(int length, double fs) {
 }
 
 int main() {
-    std::cout << "=== ACT_CPU Test (Eigen + CBLAS) ===\n\n";
+    std::cout << "=== ACT_Accelerate Test (Accelerate + CBLAS) ===\n\n";
     try {
         const double fs = 64.0;
         const int length = 32;
@@ -47,7 +47,7 @@ int main() {
             -10, 10, 10
         );
 
-        ACT_CPU act(fs, length, ranges, true);
+        ACT_Accelerate act(fs, length, ranges, true);
         int dict_size = act.generate_chirplet_dictionary();
         std::cout << "Dictionary size: " << dict_size << "\n";
 
@@ -69,22 +69,7 @@ int main() {
                       << ", a=" << result.coeffs[i] << "\n";
         }
 
-        // Save/Load sanity test
-        const std::string path = "act_cpu_test_dict.bin";
-        std::cout << "Attempting to save dictionary to '" << path << "'...\n";
-        if (act.save_dictionary(path)) {
-            std::cout << "Saved. Attempting to load...\n";
-            auto loaded = ACT_CPU::load_dictionary<ACT_CPU>(path, false);
-            if (loaded) {
-                std::cout << "Reloaded dict_size=" << loaded->get_dict_size() << ", length=" << loaded->get_length() << "\n";
-            } else {
-                std::cout << "Failed to reload dictionary." << std::endl;
-            }
-        } else {
-            std::cout << "Failed to save dictionary." << std::endl;
-        }
-
-        std::cout << "\n=== ACT_CPU Test complete ===\n";
+        std::cout << "\n=== ACT_Accelerate Test complete ===\n";
         return 0;
     } catch (const std::exception& e) {
         std::cerr << "Exception: " << e.what() << std::endl;

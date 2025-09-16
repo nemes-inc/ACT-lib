@@ -15,10 +15,17 @@
 
 ACT::ACT(double FS, int length, const ParameterRanges& ranges, bool complex_mode, bool verbose)
     : FS(FS), length(length), param_ranges(ranges), complex_mode(complex_mode), verbose(verbose) {
-    if (!verbose) {
+    if (verbose) {
         std::cout << "\n===============================================\n";
-        std::cout << "INITIALIZING ADAPTIVE CHIRPLET TRANSFORM MODULE\n";
-        std::cout << "===============================================\n\n";
+        std::cout << "INITIALIZING ACT (scalar)\n";
+        std::cout << "===============================================\n";
+        std::cout << "FS: " << FS << " Hz, length: " << length
+                  << ", complex_mode: " << (complex_mode ? "true" : "false") << "\n";
+        std::cout << "Param ranges: "
+                  << "tc[" << param_ranges.tc_min << "," << param_ranges.tc_max << "] step=" << param_ranges.tc_step << "; "
+                  << "fc[" << param_ranges.fc_min << "," << param_ranges.fc_max << "] step=" << param_ranges.fc_step << "; "
+                  << "logDt[" << param_ranges.logDt_min << "," << param_ranges.logDt_max << "] step=" << param_ranges.logDt_step << "; "
+                  << "c[" << param_ranges.c_min << "," << param_ranges.c_max << "] step=" << param_ranges.c_step << "\n\n";
     }
 }
 

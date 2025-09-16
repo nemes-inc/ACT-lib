@@ -4,8 +4,6 @@
 # Usage:
 #   make all          - Build all targets
 #   make test         - Run basic ACT test
-#   make eeg-8s       - Run 8-second EEG gamma analysis
-#   make eeg-30s      - Run 30-second EEG gamma analysis
 #   make profile      - Run performance profiling
 #   make clean        - Clean build artifacts
 #   make help         - Show available targets
@@ -21,6 +19,13 @@ LDFLAGS = -lm -pthread
 ifeq ($(shell uname),Darwin)
     CXXFLAGS += -march=native
     LDFLAGS += -framework Accelerate
+    # Use updated Accelerate CBLAS/LAPACK headers to avoid deprecation warnings
+    CXXFLAGS += -DACCELERATE_NEW_LAPACK
+    # Optional: build with ILP64 (64-bit BLAS/LAPACK integer sizes) by passing ILP64=1 to make
+    ILP64 ?= 0
+    ifeq ($(ILP64),1)
+        CXXFLAGS += -DACCELERATE_LAPACK_ILP64
+    endif
 else ifeq ($(shell uname),Linux)
     CXXFLAGS += -march=native
     LDFLAGS += -lblas -llapack
@@ -30,17 +35,15 @@ endif
 OBJDIR = obj
 BINDIR = bin
 
-# Core ACT Sources
-ACT_CORE_SOURCES = ACT.cpp ACT_CPU.cpp ACT_SIMD.cpp ACT_SIMD_MultiThreaded.cpp ACT_multithreaded.cpp ACT_Benchmark.cpp ACT_MLX.cpp
+# Core ACT Sources (legacy SIMD/MT and benchmarks removed)
+ACT_CORE_SOURCES = ACT.cpp ACT_CPU.cpp ACT_Accelerate.cpp ACT_MLX.cpp
 
 # Test Sources
 TEST_ACT_SOURCES = test_act.cpp
 TEST_ACT_CPU_SOURCES = test_act_cpu.cpp
-TEST_EEG_GAMMA_SOURCES = test_eeg_gamma.cpp
-TEST_EEG_GAMMA_8S_SOURCES = test_eeg_gamma_8s.cpp
-TEST_EEG_GAMMA_30S_SOURCES = test_eeg_gamma_30s.cpp
-TEST_SIMD_SOURCES = test_simd.cpp
-TEST_SIMD_MT_SOURCES = test_simd_multithreaded.cpp
+TEST_ACT_CPU_F_SOURCES = test_act_cpu_f.cpp
+TEST_ACT_ACCEL_SOURCES = test_act_accel.cpp
+TEST_ACT_CPU_MT_SOURCES = test_act_cpu_mt.cpp
 PROFILE_ACT_SOURCES = profile_act.cpp
 
 # Linenoise library
@@ -67,40 +70,41 @@ ALGLIB_SOURCES = \
 ACT_CORE_OBJECTS = $(ACT_CORE_SOURCES:%.cpp=$(OBJDIR)/%.o)
 ALGLIB_OBJECTS = $(ALGLIB_SOURCES:%.cpp=$(OBJDIR)/%.o)
 
-# Optional MLX integration flags (disabled by default)
-# Enable with: make USE_MLX=1 MLX_INCLUDE=/path/to/mlx/include
+# Optional: MLX integration
+# Enable with: make USE_MLX=1 MLX_INCLUDE=/path/to/mlx/include MLX_LIB=/path/to/mlx/lib
 USE_MLX ?= 0
 MLX_INCLUDE ?=
+MLX_LIB ?=
+MLX_LINK ?=
+ifneq ($(MLX_INCLUDE),)
+    CXXFLAGS += -I$(MLX_INCLUDE)
+endif
 ifeq ($(USE_MLX),1)
-    CXXFLAGS += -DACT_USE_MLX
-    ifneq ($(MLX_INCLUDE),)
-        CXXFLAGS += -I$(MLX_INCLUDE)
+    CXXFLAGS += -DUSE_MLX
+    # Apple GPU frameworks often used with MLX
+    LDFLAGS += -framework Metal -framework MetalPerformanceShaders -framework Foundation -framework QuartzCore
+    ifneq ($(MLX_LIB),)
+        LDFLAGS += -L$(MLX_LIB)
     endif
-    # Link Metal frameworks only if explicitly requested in the environment (deferred until we wire MLX)
-    #LDFLAGS += -framework Metal -framework MetalPerformanceShadersGraph -framework Foundation
+    ifneq ($(MLX_LINK),)
+        LDFLAGS += $(MLX_LINK)
+    endif
 endif
 
 # Executables
 TEST_ACT_TARGET = $(BINDIR)/test_act
 TEST_ACT_CPU_TARGET = $(BINDIR)/test_act_cpu
-TEST_EEG_GAMMA_TARGET = $(BINDIR)/test_eeg_gamma
-TEST_EEG_GAMMA_8S_TARGET = $(BINDIR)/test_eeg_gamma_8s
-TEST_EEG_GAMMA_30S_TARGET = $(BINDIR)/test_eeg_gamma_30s
-TEST_SIMD_TARGET = $(BINDIR)/test_simd
-TEST_SIMD_MT_TARGET = $(BINDIR)/test_simd_multithreaded
+TEST_ACT_CPU_F_TARGET = $(BINDIR)/test_act_cpu_f
+TEST_ACT_ACCEL_TARGET = $(BINDIR)/test_act_accel
+TEST_ACT_CPU_MT_TARGET = $(BINDIR)/test_act_cpu_mt
 PROFILE_ACT_TARGET = $(BINDIR)/profile_act
-PROFILE_ACT_SIMD_MT_TARGET = $(BINDIR)/profile_act_SIMD_MultiThreaded
 TEST_ACT_SYNTHETIC_TARGET = $(BINDIR)/test_act_synthetic
-TEST_ACT_SYNTHETIC_SIMD_TARGET = $(BINDIR)/test_act_synthetic_simd
-TEST_ACT_SYNTHETIC_MT_TARGET = $(BINDIR)/test_act_synthetic_mt
-TEST_ACT_SYNTHETIC_SIMD_MT_TARGET = $(BINDIR)/test_act_synthetic_simd_mt
-TEST_ALGLIB_DEBUG_TARGET = $(BINDIR)/test_alglib_debug
 TEST_ACT_MLX_TARGET = $(BINDIR)/test_act_mlx
 EEG_ACT_ANALYZER_TARGET = $(BINDIR)/eeg_act_analyzer
 TEST_DICT_IO_TARGET = $(BINDIR)/test_dict_io
 
 # Default target
-all: $(TEST_ACT_TARGET) $(TEST_ACT_CPU_TARGET) $(TEST_EEG_GAMMA_8S_TARGET) $(TEST_EEG_GAMMA_30S_TARGET) $(TEST_SIMD_TARGET) $(PROFILE_ACT_TARGET) $(PROFILE_ACT_SIMD_MT_TARGET) $(TEST_ACT_SYNTHETIC_TARGET) $(TEST_ACT_SYNTHETIC_SIMD_TARGET) $(TEST_ACT_SYNTHETIC_MT_TARGET) $(TEST_ACT_SYNTHETIC_SIMD_MT_TARGET) $(TEST_ALGLIB_DEBUG_TARGET) $(EEG_ACT_ANALYZER_TARGET) $(TEST_DICT_IO_TARGET) $(TEST_ACT_MLX_TARGET)
+all: $(TEST_ACT_TARGET) $(TEST_ACT_CPU_TARGET) $(TEST_ACT_CPU_F_TARGET) $(TEST_ACT_ACCEL_TARGET) $(TEST_ACT_CPU_MT_TARGET) $(PROFILE_ACT_TARGET) $(TEST_ACT_SYNTHETIC_TARGET) $(EEG_ACT_ANALYZER_TARGET) $(TEST_DICT_IO_TARGET) $(TEST_ACT_MLX_TARGET)
 
 # Create directories
 $(OBJDIR):
@@ -135,70 +139,38 @@ $(TEST_ACT_CPU_TARGET): $(ACT_CORE_OBJECTS) $(OBJDIR)/test_act_cpu.o $(ALGLIB_OB
 	@$(CXX) $^ -o $@ $(LDFLAGS)
 	@echo "✅ ACT_CPU test executable created: $@"
 
-$(TEST_EEG_GAMMA_TARGET): $(ACT_CORE_OBJECTS) $(OBJDIR)/test_eeg_gamma.o $(ALGLIB_OBJECTS) | $(BINDIR)
-	@echo "Linking EEG gamma analysis executable..."
+$(TEST_ACT_CPU_F_TARGET): $(ACT_CORE_OBJECTS) $(OBJDIR)/test_act_cpu_f.o $(ALGLIB_OBJECTS) | $(BINDIR)
+	@echo "Linking ACT_CPU (float) test executable..."
 	@$(CXX) $^ -o $@ $(LDFLAGS)
-	@echo "✅ EEG gamma analysis executable created: $@"
+	@echo "✅ ACT_CPU (float) test executable created: $@"
 
-$(TEST_EEG_GAMMA_8S_TARGET): $(ACT_CORE_OBJECTS) $(OBJDIR)/test_eeg_gamma_8s.o $(ALGLIB_OBJECTS) | $(BINDIR)
-	@echo "Linking 8s EEG gamma analysis executable..."
+$(TEST_ACT_ACCEL_TARGET): $(ACT_CORE_OBJECTS) $(OBJDIR)/test_act_accel.o $(ALGLIB_OBJECTS) | $(BINDIR)
+	@echo "Linking ACT_Accelerate test executable..."
 	@$(CXX) $^ -o $@ $(LDFLAGS)
-	@echo "✅ 8s EEG gamma analysis executable created: $@"
-
-$(TEST_EEG_GAMMA_30S_TARGET): $(ACT_CORE_OBJECTS) $(OBJDIR)/test_eeg_gamma_30s.o $(ALGLIB_OBJECTS) | $(BINDIR)
-	@echo "Linking 30s EEG gamma analysis executable..."
-	@$(CXX) $^ -o $@ $(LDFLAGS)
-	@echo "✅ 30s EEG gamma analysis executable created: $@"
-
-$(TEST_SIMD_TARGET): $(ACT_CORE_OBJECTS) $(OBJDIR)/test_simd.o $(ALGLIB_OBJECTS) | $(BINDIR)
-	@echo "Linking SIMD test executable..."
-	@$(CXX) $^ -o $@ $(LDFLAGS)
-	@echo "✅ SIMD test executable created: $@"
+	@echo "✅ ACT_Accelerate test executable created: $@"
 
 $(TEST_DICT_IO_TARGET): $(ACT_CORE_OBJECTS) $(OBJDIR)/test_dict_io.o $(ALGLIB_OBJECTS) | $(BINDIR)
 	@echo "Linking dictionary IO test executable..."
 	@$(CXX) $^ -o $@ $(LDFLAGS)
 	@echo "✅ Dictionary IO test executable created: $@"
 
-$(TEST_SIMD_MT_TARGET): $(ACT_CORE_OBJECTS) $(OBJDIR)/test_simd_multithreaded.o $(ALGLIB_OBJECTS) | $(BINDIR)
-	@echo "Linking SIMD multithreaded test executable..."
-	@$(CXX) $^ -o $@ $(LDFLAGS)
-	@echo "✅ SIMD multithreaded test executable created: $@"
-
 $(PROFILE_ACT_TARGET): $(ACT_CORE_OBJECTS) $(OBJDIR)/profile_act.o $(ALGLIB_OBJECTS) | $(BINDIR)
 	@echo "Linking ACT profiling executable..."
 	@$(CXX) $^ -o $@ $(LDFLAGS)
 	@echo "✅ ACT profiling executable created: $@"
 
-$(PROFILE_ACT_SIMD_MT_TARGET): $(ACT_CORE_OBJECTS) $(OBJDIR)/profile_act_SIMD_MultiThreaded.o $(ALGLIB_OBJECTS) | $(BINDIR)
-	@echo "Linking SIMD + MT profiling executable..."
+# New: ACT_CPU multithreaded batch test
+$(TEST_ACT_CPU_MT_TARGET): $(ACT_CORE_OBJECTS) $(OBJDIR)/test_act_cpu_mt.o $(ALGLIB_OBJECTS) | $(BINDIR)
+	@echo "Linking ACT_CPU MT test executable..."
 	@$(CXX) $^ -o $@ $(LDFLAGS)
-	@echo "✅ SIMD + MT profiling executable created: $@"
+	@echo "✅ ACT_CPU MT test executable created: $@"
 
 $(TEST_ACT_SYNTHETIC_TARGET): $(ACT_CORE_OBJECTS) $(OBJDIR)/test_act_synthetic.o $(ALGLIB_OBJECTS) | $(BINDIR)
 	@echo "Linking synthetic ACT test executable..."
 	@$(CXX) $^ -o $@ $(LDFLAGS)
 	@echo "✅ Synthetic ACT test executable created: $@"
 
-$(TEST_ACT_SYNTHETIC_SIMD_TARGET): $(ACT_CORE_OBJECTS) $(OBJDIR)/test_act_synthetic_simd.o $(ALGLIB_OBJECTS) | $(BINDIR)
-	@echo "Linking synthetic ACT SIMD test executable..."
-	@$(CXX) $^ -o $@ $(LDFLAGS)
-	@echo "✅ Synthetic ACT SIMD test executable created: $@"
-
-$(TEST_ACT_SYNTHETIC_MT_TARGET): $(ACT_CORE_OBJECTS) $(OBJDIR)/ACT_multithreaded.o $(OBJDIR)/test_act_synthetic_mt.o $(ALGLIB_OBJECTS) | $(BINDIR)
-	@echo "Linking synthetic ACT multithreaded test executable..."
-	@$(CXX) $^ -o $@ $(LDFLAGS)
-	@echo "✅ Synthetic ACT multithreaded test executable created: $@"
-
-$(TEST_ACT_SYNTHETIC_SIMD_MT_TARGET): $(ACT_CORE_OBJECTS) $(OBJDIR)/ACT_SIMD_MultiThreaded.o $(OBJDIR)/ACT_SIMD.o $(OBJDIR)/test_act_synthetic_simd_mt.o $(ALGLIB_OBJECTS) | $(BINDIR)
-	@echo "Linking synthetic ACT SIMD multithreaded test executable..."
-	@$(CXX) $^ -o $@ $(LDFLAGS)
-	@echo "✅ Synthetic ACT SIMD multithreaded test executable created: $@"
-
-$(TEST_ALGLIB_DEBUG_TARGET): $(ACT_CORE_OBJECTS) $(OBJDIR)/test_alglib_debug.o $(ALGLIB_OBJECTS) | $(BINDIR)
-	@echo "Linking ALGLIB debug test executable..."
-	@$(CXX) $^ -o $@ $(LDFLAGS)
-	@echo "✅ ALGLIB debug test executable created: $@"
+ 
 
 $(TEST_ACT_MLX_TARGET): $(ACT_CORE_OBJECTS) $(OBJDIR)/test_act_mlx.o $(ALGLIB_OBJECTS) | $(BINDIR)
 	@echo "Linking ACT MLX test executable..."
@@ -208,6 +180,21 @@ $(TEST_ACT_MLX_TARGET): $(ACT_CORE_OBJECTS) $(OBJDIR)/test_act_mlx.o $(ALGLIB_OB
 # Convenience alias to build MLX test (ensures correct target path is used)
 test_act_mlx: $(TEST_ACT_MLX_TARGET)
 	@echo "Built $(TEST_ACT_MLX_TARGET)"
+
+# Convenience alias for synthetic test
+test_act_synthetic: $(TEST_ACT_SYNTHETIC_TARGET)
+	@echo "Built $(TEST_ACT_SYNTHETIC_TARGET)"
+
+# Convenience aliases for ACT_CPU_f test
+test-cpu-f: $(TEST_ACT_CPU_F_TARGET)
+	@echo "Built $(TEST_ACT_CPU_F_TARGET)"
+
+test_act_cpu_f: $(TEST_ACT_CPU_F_TARGET)
+	@echo "Built $(TEST_ACT_CPU_F_TARGET)"
+
+# Convenience alias for ACT_CPU MT test
+test_act_cpu_mt: $(TEST_ACT_CPU_MT_TARGET)
+	@echo "Built $(TEST_ACT_CPU_MT_TARGET)"
 
 $(EEG_ACT_ANALYZER_TARGET): $(ACT_CORE_OBJECTS) $(OBJDIR)/eeg_act_analyzer.o $(ALGLIB_OBJECTS) $(LINENOISE_OBJECTS) | $(BINDIR)
 	@echo "Linking EEG ACT analyzer executable..."
@@ -219,9 +206,6 @@ eeg-analyzer: $(EEG_ACT_ANALYZER_TARGET)
 eeg_act_analyzer: eeg-analyzer
 
 # Run targets
-test-alglib-debug: $(TEST_ALGLIB_DEBUG_TARGET)
-	@echo "🔬 Running ALGLIB debug test..."
-	@./$(TEST_ALGLIB_DEBUG_TARGET)
 
 test-dict-io: $(TEST_DICT_IO_TARGET)
 	@echo "💾 Running dictionary save/load test..."
@@ -235,29 +219,17 @@ test-cpu: $(TEST_ACT_CPU_TARGET)
 	@echo "🧪 Running ACT_CPU test..."
 	@./$(TEST_ACT_CPU_TARGET)
 
-eeg-8s: $(TEST_EEG_GAMMA_8S_TARGET)
-	@echo "🧠 Running 8-second EEG gamma analysis..."
-	@./$(TEST_EEG_GAMMA_8S_TARGET)
+test-accel: $(TEST_ACT_ACCEL_TARGET)
+	@echo "🧪 Running ACT_Accelerate test..."
+	@./$(TEST_ACT_ACCEL_TARGET)
 
-eeg-30s: $(TEST_EEG_GAMMA_30S_TARGET)
-	@echo "🧠 Running 30-second EEG gamma analysis..."
-	@./$(TEST_EEG_GAMMA_30S_TARGET)
-
-simd: $(TEST_SIMD_TARGET)
-	@echo "⚡ Running SIMD performance test..."
-	@./$(TEST_SIMD_TARGET)
-
-simd-mt: $(TEST_SIMD_MT_TARGET)
-	@echo "⚡ Running SIMD multithreaded test..."
-	@./$(TEST_SIMD_MT_TARGET)
+ 
 
 profile: $(PROFILE_ACT_TARGET)
 	@echo "📊 Running ACT performance profiling..."
 	@./$(PROFILE_ACT_TARGET)
 
-profile-simd-mt: $(PROFILE_ACT_SIMD_MT_TARGET)
-	@echo "📊 Running ACT SIMD + Multi-threaded profiling..."
-	@./$(PROFILE_ACT_SIMD_MT_TARGET)
+ 
 
 # Utility targets
 clean:
@@ -273,21 +245,13 @@ help:
 	@echo "  all          - Build all executables"
 	@echo "  test-act     - Build basic ACT test"
 	@echo "  test-cpu     - Build ACT_CPU test"
-	@echo "  eeg-8s       - Build 8-second EEG analysis"
-	@echo "  eeg-30s      - Build 30-second EEG analysis"
-	@echo "  simd         - Build SIMD performance test"
+	@echo "  test-accel   - Build ACT_Accelerate test"
 	@echo "  test_act_mlx - Build ACT MLX test (falls back to CPU unless USE_MLX=1)"
 	@echo "  profile      - Build performance profiling tool"
-	@echo "  profile-simd-mt - Build SIMD+MT profiling tool"
 	@echo ""
 	@echo "Run Targets:"
 	@echo "  test         - Run basic ACT test"
-	@echo "  eeg-8s       - Run 8-second EEG gamma analysis"
-	@echo "  eeg-30s      - Run 30-second EEG gamma analysis"
-	@echo "  simd         - Run SIMD performance test"
-	@echo "  simd-mt      - Run SIMD multithreaded test"
 	@echo "  profile      - Run performance profiling"
-	@echo "  profile-simd-mt - Run SIMD + MT profiling"
 	@echo ""
 	@echo "Utility Targets:"
 	@echo "  clean        - Remove build artifacts"
@@ -300,7 +264,7 @@ help:
 	@echo "  - Linux: BLAS/LAPACK libraries"
 
 # Phony targets
-.PHONY: all test test-alglib-debug eeg-8s eeg-30s simd simd-mt profile clean help eeg-analyzer eeg_act_analyzer test_act_mlx
+.PHONY: all test test-alglib-debug eeg-8s eeg-30s profile clean help eeg-analyzer eeg_act_analyzer test_act_mlx
 
 # Dependency tracking
 -include $(ACT_CORE_OBJECTS:.o=.d)

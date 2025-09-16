@@ -1,47 +1,70 @@
 #ifndef ACT_MLX_H
 #define ACT_MLX_H
 
-#include "ACT.h"
-#include <cstddef>
+#include "ACT_Accelerate.h"
+#include "ACT.h" // for ACT::ParameterRanges convenience conversion
 #include <utility>
 #include <vector>
+#include <memory>
+
+#ifdef USE_MLX
+#include "mlx/mlx.h"
+namespace mx = mlx::core;
+#endif
 
 /**
  * ACT_MLX - Adaptive Chirplet Transform with a GPU-accelerated dictionary search (Apple MLX)
  *
  * This class scaffolds a drop-in backend that overrides search_dictionary() and will
- * call into MLX C++ when ACT_USE_MLX is defined at build time. By default (no MLX),
- * it safely falls back to the base-class implementation so existing builds keep working.
+ * call into MLX C++ when integrated. For now it inherits the Accelerate-optimized
+ * CPU path from ACT_Accelerate. No compile-time toggles are needed: selecting this
+ * class selects the MLX-capable backend.
  */
-class ACT_MLX : public ACT {
+template <typename Scalar>
+class ACT_MLX_T : public ACT_Accelerate_T<Scalar> {
 public:
-    ACT_MLX(double FS,
-            int length,
-            const ParameterRanges& ranges,
-            bool complex_mode = false,
-            bool verbose = false);
-    virtual ~ACT_MLX() = default;
+    using Base = ACT_Accelerate_T<Scalar>;
+    using ParameterRanges = typename Base::ParameterRanges;
 
-    // GPU-accelerated dictionary search (fallbacks to CPU when MLX is disabled)
-    std::pair<int, double> search_dictionary(const std::vector<double>& signal) override;
+    // Primary constructor using ACT_CPU/ACT_Accelerate parameter ranges
+    ACT_MLX_T(double FS,
+              int length,
+              const ParameterRanges& ranges,
+              bool verbose = false);
 
-    // Optional knobs (no-ops unless/untill MLX path is enabled)
-    void set_tile_size(std::size_t M) { tile_size = M; }
-    void enable_mlx(bool enable = true) { use_mlx = enable; }
-    void use_precomputed_gemv(bool enable = true) { prefer_gemv = enable; }
+    // Convenience constructor to accept ACT::ParameterRanges and convert
+    ACT_MLX_T(double FS,
+              int length,
+              const ACT::ParameterRanges& ranges,
+              bool verbose = false);
+
+    ~ACT_MLX_T() override = default;
+
+    // Bring in base overloads
+    using Base::search_dictionary;
+    // Override Eigen-based search to enable MLX path later
+    std::pair<int, Scalar> search_dictionary(const Eigen::Ref<const act::VecX<Scalar>>& signal) const override;
+
+    // Override dictionary generation to pre-pack and warm up MLX (float32 only)
+    int generate_chirplet_dictionary() override;
+
+public:
+    // When loading a dictionary from disk, perform MLX packing/warmup too
+    void on_dictionary_loaded() override;
 
 private:
-    bool use_mlx;               // runtime toggle; also requires ACT_USE_MLX at compile time
-    std::size_t tile_size;      // atoms per tile when generating on-the-fly on device
-    bool prefer_gemv = true;    // CPU fallback: use BLAS GEMV on a flattened dictionary
+#ifdef USE_MLX
+    // Lazily packed row-major dictionary and device array (float32 only)
+    mutable bool mlx_ready_ = false;
+    mutable std::vector<float> dict_rowmajor_; // shape [m * n] row-major
+    mutable std::unique_ptr<mx::array> dict_gpu_; // shape {m, n}
 
-    // CPU fallback storage for GEMV path
-    std::vector<double> dict_flat;   // Row-major [dict_size, length]
-    bool dict_flat_ready = false;
-    std::vector<double> scores_buffer; // reuse allocations for output scores
-
-    // Ensure dict_flat is materialized from dict_mat
-    void ensure_flattened_dictionary();
+    void ensure_mlx_dict() const;
+#endif
 };
+
+// Default double-precision alias for compatibility
+using ACT_MLX = ACT_MLX_T<double>;
+using ACT_MLX_f = ACT_MLX_T<float>;
 
 #endif // ACT_MLX_H

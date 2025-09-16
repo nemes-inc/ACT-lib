@@ -6,25 +6,22 @@ A high-performance, general-purpose C++ implementation of the Adaptive Chirplet 
 
 This section summarizes the current state of the repository as it is now.
 
-- __Core algorithm__: The base `ACT` implementation in `ACT.cpp/h` performs dictionary-based matching pursuit with unit-energy chirplet generation and BFGS refinement. `search_dictionary` is now virtual, enabling backend overrides.
-- __SIMD backend__: `ACT_SIMD` overrides `search_dictionary` and key primitives using Apple Accelerate (vDSP) and NEON helpers. It remains the primary CPU-optimized path for macOS/ARM.
-- __MLX backend scaffold__: `ACT_MLX` is introduced as a drop-in subclass of `ACT`.
-  - Today, it provides a fast CPU baseline by flattening the dictionary to a row‑major matrix and performing a single BLAS GEMV (`cblas_dgemv`) to compute all dot products at once. This has shown substantial reductions in dictionary search time and end-to-end transform time in profiling.
-  - It includes toggles `enable_mlx(bool)` and `use_precomputed_gemv(bool)`; with MLX disabled (default), it uses the GEMV path. MLX GPU acceleration hooks are scaffolded behind `ACT_USE_MLX` but not yet implemented.
-- __Build system__: The `Makefile` includes an optional `USE_MLX` flag and paths for future MLX C++ integration. A new test target `test_act_mlx` demonstrates the `ACT_MLX` backend and runs without requiring MLX (uses the GEMV CPU path by default).
+- __Core algorithm__: The base `ACT` implementation in `ACT.cpp/h` performs dictionary-based matching pursuit with unit-energy chirplet generation and BFGS refinement. `search_dictionary` is virtual, enabling backend overrides.
+- __CPU backends__: `ACT_CPU` (Eigen + BLAS baseline) and `ACT_Accelerate` (Apple Accelerate/vDSP-optimized) provide high-performance CPU implementations.
+- __MLX backend scaffold__: `ACT_MLX` is a subclass of `ACT_Accelerate`. Today it uses the same CPU path as `ACT_Accelerate`. No compile-time toggles or runtime flags are needed; select the backend by constructing `ACT_MLX`. GPU acceleration will be added next.
+- __Build system__: No `USE_MLX` or `ACT_USE_MLX` flags are required. An optional `MLX_INCLUDE` path can be supplied for future MLX integration headers (not needed today). A test target `test_act_mlx` demonstrates the backend and runs without any MLX dependency.
 - __Profiling__: `profile_act.cpp` can instantiate `ACT_MLX` and measure end-to-end timings (dictionary search, full transform, SNR). Logs show when the GEMV path is used for search.
 - __CLI analyzer__: `eeg_act_analyzer` remains available for interactive exploration of CSV EEG data and ACT parameters.
 - __Web UI (p5.js)__: A simple in-browser visual workbench exists under `p5js/` (renamed display title: “ACT Analysis Workbench”).
 
 __What is not yet done__
-- MLX GPU execution (precomputed dictionary GEMV on device or tiled on-the-fly chirplet generation with on-device matvec) is not yet implemented. The C++ scaffolding and build flags are in place to add this next.
-- The base `ACT` class uses per-atom inner products for dictionary search. The GEMV acceleration is currently provided in `ACT_MLX`.
+- MLX GPU execution (precomputed dictionary GEMV or on-the-fly tiled atom generation on device) is not yet implemented. `ACT_MLX` currently forwards to the `ACT_Accelerate` CPU path.
+- The base `ACT` class uses per-atom inner products for dictionary search. CPU acceleration is provided by `ACT_CPU`/`ACT_Accelerate`.
 
 __How to try the faster search today__
-- Use the `ACT_MLX` backend (CPU GEMV path by default):
-  - Instantiate `ACT_MLX`, call `generate_chirplet_dictionary()`, then run `search_dictionary(...)` or `transform(...)`.
-  - At runtime you can ensure GEMV is used by leaving MLX disabled (`enable_mlx(false)`) and keeping precomputed GEMV on (`use_precomputed_gemv(true)`, default).
-  - On macOS, the path uses the Accelerate framework; on Linux, ensure BLAS is available.
+- Use the `ACT_Accelerate` or `ACT_MLX` backend (both use Accelerate on macOS; BLAS on Linux):
+  - Instantiate `ACT_Accelerate` or `ACT_MLX`, call `generate_chirplet_dictionary()`, then run `search_dictionary(...)` or `transform(...)`.
+  - `ACT_MLX` is API-compatible and currently uses the same CPU path as `ACT_Accelerate`, with GPU acceleration to be added next.
 
 ## Overview
 
@@ -83,8 +80,8 @@ make test
 
 ### Running specialized tests
 ```bash
-# SIMD performance test
-make simd
+# MLX backend test (inherits Accelerate CPU path for now)
+make test_act_mlx
 
 # Performance profiling
 make profile
@@ -138,17 +135,19 @@ Notes:
 
 ### Class Hierarchy
 ```
-ACT (Base Class)
-├── ACT_SIMD (SIMD Optimized)
-├── ACT_SIMD_MultiThreaded (SIMD + Multi-threading)
-└── ACT_multithreaded (Multi-threading)
+ACT (Base scalar/vector backend)
+├── ACT_CPU (Eigen + BLAS baseline)
+├── ACT_Accelerate (Apple Accelerate-optimized CPU)
+└── ACT_MLX (inherits ACT_Accelerate; future MLX GPU)
 ```
 
 ### Key Components
-- **ACT.cpp/h**: Core ACT implementation with BFGS optimization
-- **ACT_SIMD.cpp/h**: SIMD-accelerated version using Accelerate framework
-- **ACT_SIMD_MultiThreaded.cpp/h**: Combined SIMD and multi-threading
-- **ACT_Benchmark.cpp/h**: Performance benchmarking utilities
+- **ACT.cpp/h**: Core scalar implementation with BFGS optimization
+- **ACT_CPU.h/.cpp**: Eigen + BLAS baseline backend
+- **ACT_Accelerate.h/.cpp**: Accelerate-optimized backend (macOS) with BLAS fallback
+- **ACT_MLX.h/.cpp**: Subclass of `ACT_Accelerate`; ready for future MLX GPU integration
+- **test_*.cpp**: Unit and smoke tests, including `test_act_mlx.cpp`
+- **profile_act.cpp**: End-to-end profiling of dictionary, search, and transform
 
 ## Algorithm Details
 
@@ -209,40 +208,32 @@ Optimal parameter resolution balances:
 
 ## Usage Examples
 
-### Basic ACT Analysis
+### Basic ACT Analysis (Accelerate backend)
 ```cpp
-#include "ACT_SIMD.h"
+#include "ACT_Accelerate.h"
 
 // Create parameter ranges
-ACT::ParameterRanges ranges(0, 2047, 8.0,     // time: 0-2047, step 8
-                           25.0, 50.0, 2.0,   // freq: 25-50Hz, step 2Hz
-                           -3.0, -1.0, 0.5,   // duration: log scale
-                           -10.0, 10.0, 5.0); // chirp rate: ±10 Hz/s
+ACT_CPU::ParameterRanges ranges(0, 2047, 8.0,     // time: 0-2047, step 8
+                                25.0, 50.0, 2.0,  // freq: 25-50Hz, step 2Hz
+                                -3.0, -1.0, 0.5,  // duration: log scale
+                                -10.0, 10.0, 5.0);// chirp rate: ±10 Hz/s
 
-// Initialize ACT with SIMD optimization
-ACT_SIMD act(256.0, 2048, ranges);
-act.create_dictionary();
+// Initialize ACT_Accelerate (uses Accelerate on macOS; BLAS on Linux)
+ACT_Accelerate act(256.0, 2048, ranges, /*verbose=*/true);
+act.generate_chirplet_dictionary();
 
 // Analyze signal
 auto result = act.transform(signal, 5);  // Find top 5 chirplets
 ```
 
-### SIMD Optimized ACT
+### Using the MLX backend (currently CPU path)
 ```cpp
-ACT_SIMD act(256.0, signal_length, ranges);
-act.create_dictionary();
+#include "ACT_MLX.h"
 
-// Perform analysis
+ACT_CPU::ParameterRanges ranges(/* ... */);
+ACT_MLX act(256.0, signal_length, ranges, /*verbose=*/true);
+act.generate_chirplet_dictionary();
 auto result = act.transform(eeg_signal, 10);
-
-// Access results
-for (size_t i = 0; i < result.params.size(); ++i) {
-    double time_center = result.params[i][0] / 256.0;  // seconds
-    double frequency = result.params[i][1];            // Hz
-    double duration = exp(result.params[i][2]) * 1000; // ms
-    double chirp_rate = result.params[i][3];           // Hz/s
-    double coefficient = result.coeffs[i];
-}
 ```
 
 Initial findings on performance using the included dataset:

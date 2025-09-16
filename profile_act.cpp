@@ -1,5 +1,6 @@
 #include "ACT.h"
-#include "ACT_SIMD.h"
+#include "ACT_CPU.h"
+#include "ACT_Accelerate.h"
 #include "ACT_MLX.h"
 #include <iostream>
 #include <chrono>
@@ -7,8 +8,9 @@
 #include <random>
 #include <iomanip>
 #include <cmath>
+#include <cstdlib>
 
-#define ACT_USE_MLX
+// MLX backend inherits ACT_Accelerate CPU path; GPU acceleration can be wired later
 
 class Timer {
 private:
@@ -107,23 +109,105 @@ int main() {
     int expected_dict_size = tc_count * fc_count * logDt_count * c_count;
     
     std::cout << "  Expected Dictionary Size: " << expected_dict_size << " chirplets" << std::endl;
-    std::cout << "  Memory Estimate: ~" << (expected_dict_size * SIGNAL_LENGTH * sizeof(double)) / (1024*1024) 
-              << " MB" << std::endl;
     
     Timer timer;
     
     print_separator("DICTIONARY GENERATION");
     
-    // Initialize ACT with profiling
+    // Backend selection via env var
+    std::string backend = "cpu"; // default
+    if (const char* e = std::getenv("ACT_PROFILE_BACKEND")) backend = std::string(e);
+    std::string prec = "double"; // default
+    if (const char* p = std::getenv("ACT_PROFILE_PREC")) prec = std::string(p);
+    bool use_float = (prec == "float" || prec == "float32" || prec == "f32");
+    bool coarse_only = false;
+    if (const char* e = std::getenv("ACT_COARSE_ONLY")) {
+        if (std::string(e) == "1" || std::string(e) == "true" || std::string(e) == "TRUE") coarse_only = true;
+    }
+    std::cout << "Backend: " << backend << std::endl;
+    std::cout << "Precision: " << (use_float ? "float32" : "double") << std::endl;
+    std::cout << "Coarse Only: " << coarse_only << std::endl;
+
+    // Print memory estimate after precision is known
+    size_t bytes_per_elem = use_float ? sizeof(float) : sizeof(double);
+    std::cout << "  Memory Estimate: ~" << (expected_dict_size * SIGNAL_LENGTH * bytes_per_elem) / (1024*1024) 
+              << " MB" << std::endl;
+
+    // Mirror ranges for ACT_CPU-based classes
+    ACT_CPU::ParameterRanges cpu_ranges(
+        eeg_ranges.tc_min, eeg_ranges.tc_max, eeg_ranges.tc_step,
+        eeg_ranges.fc_min, eeg_ranges.fc_max, eeg_ranges.fc_step,
+        eeg_ranges.logDt_min, eeg_ranges.logDt_max, eeg_ranges.logDt_step,
+        eeg_ranges.c_min, eeg_ranges.c_max, eeg_ranges.c_step
+    );
+
+    // Initialize selected backend and generate dictionary
     timer.start();
-    ACT_MLX act(FS, SIGNAL_LENGTH, eeg_ranges, false, true);
-    act.enable_mlx(false);
-    double init_time = timer.elapsed_ms();
-    print_timing("ACT Initialization", init_time);
-    
-    // Generate dictionary
-    timer.start();
-    int actual_dict_size = act.generate_chirplet_dictionary();
+    int actual_dict_size = 0;
+    std::unique_ptr<ACT> act_legacy;
+    std::unique_ptr<ACT_CPU> act_cpu;
+    std::unique_ptr<ACT_Accelerate> act_accel;
+    std::unique_ptr<ACT_MLX> act_mlx;
+    // Float32 variants
+    std::unique_ptr<ACT_CPU_f> act_cpu_f;
+    std::unique_ptr<ACT_Accelerate_f> act_accel_f;
+    std::unique_ptr<ACT_MLX_f> act_mlx_f;
+
+    if (backend == "act" || backend == "legacy") {
+        act_legacy.reset(new ACT(FS, SIGNAL_LENGTH, eeg_ranges, false, true));
+        double init_time = timer.elapsed_ms();
+        print_timing("ACT Initialization", init_time);
+        timer.start();
+        actual_dict_size = act_legacy->generate_chirplet_dictionary();
+    } else if (backend == "accel") {
+        if (use_float) {
+            ACT_CPU_f::ParameterRanges cpu_ranges_f(
+                cpu_ranges.tc_min, cpu_ranges.tc_max, cpu_ranges.tc_step,
+                cpu_ranges.fc_min, cpu_ranges.fc_max, cpu_ranges.fc_step,
+                cpu_ranges.logDt_min, cpu_ranges.logDt_max, cpu_ranges.logDt_step,
+                cpu_ranges.c_min, cpu_ranges.c_max, cpu_ranges.c_step
+            );
+            act_accel_f.reset(new ACT_Accelerate_f(FS, SIGNAL_LENGTH, cpu_ranges_f, false));
+        } else {
+            act_accel.reset(new ACT_Accelerate(FS, SIGNAL_LENGTH, cpu_ranges, false));
+        }
+        double init_time = timer.elapsed_ms();
+        print_timing("ACCEL Initialization", init_time);
+        timer.start();
+        actual_dict_size = (use_float ? act_accel_f->generate_chirplet_dictionary() : act_accel->generate_chirplet_dictionary());
+    } else if (backend == "mlx") {
+        if (use_float) {
+            ACT_CPU_f::ParameterRanges cpu_ranges_f(
+                cpu_ranges.tc_min, cpu_ranges.tc_max, cpu_ranges.tc_step,
+                cpu_ranges.fc_min, cpu_ranges.fc_max, cpu_ranges.fc_step,
+                cpu_ranges.logDt_min, cpu_ranges.logDt_max, cpu_ranges.logDt_step,
+                cpu_ranges.c_min, cpu_ranges.c_max, cpu_ranges.c_step
+            );
+            act_mlx_f.reset(new ACT_MLX_f(FS, SIGNAL_LENGTH, cpu_ranges_f, true));
+        } else {
+            act_mlx.reset(new ACT_MLX(FS, SIGNAL_LENGTH, cpu_ranges, true));
+        }
+        double init_time = timer.elapsed_ms();
+        print_timing("MLX Initialization", init_time);
+        timer.start();
+        actual_dict_size = (use_float ? act_mlx_f->generate_chirplet_dictionary() : act_mlx->generate_chirplet_dictionary());
+    } else { // default CPU
+        if (use_float) {
+            ACT_CPU_f::ParameterRanges cpu_ranges_f(
+                cpu_ranges.tc_min, cpu_ranges.tc_max, cpu_ranges.tc_step,
+                cpu_ranges.fc_min, cpu_ranges.fc_max, cpu_ranges.fc_step,
+                cpu_ranges.logDt_min, cpu_ranges.logDt_max, cpu_ranges.logDt_step,
+                cpu_ranges.c_min, cpu_ranges.c_max, cpu_ranges.c_step
+            );
+            act_cpu_f.reset(new ACT_CPU_f(FS, SIGNAL_LENGTH, cpu_ranges_f, false));
+        } else {
+            act_cpu.reset(new ACT_CPU(FS, SIGNAL_LENGTH, cpu_ranges, false));
+        }
+        double init_time = timer.elapsed_ms();
+        print_timing("CPU Initialization", init_time);
+        timer.start();
+        actual_dict_size = (use_float ? act_cpu_f->generate_chirplet_dictionary() : act_cpu->generate_chirplet_dictionary());
+    }
     double dict_gen_time = timer.elapsed_s();
     print_timing("Dictionary Generation", dict_gen_time * 1000, 
                  std::to_string(actual_dict_size) + " chirplets");
@@ -156,7 +240,41 @@ int main() {
         
         // Dictionary search timing
         timer.start();
-        auto search_result = act.search_dictionary(test_signals[i]);
+        std::pair<int,double> search_result;
+        if (act_legacy) search_result = act_legacy->search_dictionary(test_signals[i]);
+        else if (act_mlx || act_mlx_f) {
+            if (use_float) {
+                const auto& s = test_signals[i];
+                std::vector<float> sf(s.size());
+                for (size_t j=0;j<s.size();++j) sf[j] = static_cast<float>(s[j]);
+                auto r = act_mlx_f->search_dictionary(sf);
+                search_result = {r.first, static_cast<double>(r.second)};
+            } else {
+                search_result = act_mlx->search_dictionary(test_signals[i]);
+            }
+        }
+        else if (act_accel || act_accel_f) {
+            if (use_float) {
+                const auto& s = test_signals[i];
+                std::vector<float> sf(s.size());
+                for (size_t j=0;j<s.size();++j) sf[j] = static_cast<float>(s[j]);
+                auto r = act_accel_f->search_dictionary(sf);
+                search_result = {r.first, static_cast<double>(r.second)};
+            } else {
+                search_result = act_accel->search_dictionary(test_signals[i]);
+            }
+        }
+        else if (act_cpu || act_cpu_f) {
+            if (use_float) {
+                const auto& s = test_signals[i];
+                std::vector<float> sf(s.size());
+                for (size_t j=0;j<s.size();++j) sf[j] = static_cast<float>(s[j]);
+                auto r = act_cpu_f->search_dictionary(sf);
+                search_result = {r.first, static_cast<double>(r.second)};
+            } else {
+                search_result = act_cpu->search_dictionary(test_signals[i]);
+            }
+        }
         double search_time = timer.elapsed_ms();
         search_times.push_back(search_time);
         print_timing("  Dictionary Search", search_time, 
@@ -164,7 +282,98 @@ int main() {
         
         // Full transform timing
         timer.start();
-        auto result = act.transform(test_signals[i], TRANSFORM_ORDER, false);
+        // Transform
+        ACT::TransformResult result;
+        if (act_legacy) {
+            auto r = act_legacy->transform(test_signals[i], TRANSFORM_ORDER, false);
+            result = r;
+        } else if (act_cpu || act_accel || act_mlx || act_cpu_f || act_accel_f || act_mlx_f) {
+            if (coarse_only) {
+                std::cout << "  Coarse Only Transform" << std::endl;
+                const auto& s = test_signals[i];
+                ACT::TransformResult result_tmp;
+                if (use_float) {
+                    ACT_CPU_f::TransformOptions opts; opts.order = TRANSFORM_ORDER; opts.refine = false; opts.residual_threshold = 1e-6;
+                    std::vector<float> sf(s.size()); for (size_t j=0;j<s.size();++j) sf[j] = static_cast<float>(s[j]);
+                    Eigen::Map<const act::VecX<float>> x(sf.data(), (int)sf.size());
+                    ACT_CPU_f::TransformResult r;
+                    if (act_accel_f) r = act_accel_f->transform(x, opts);
+                    else if (act_mlx_f) r = act_mlx_f->transform(x, opts);
+                    else r = act_cpu_f->transform(x, opts);
+                    // Convert r to ACT::TransformResult below
+                    result.params.resize(r.params.rows());
+                    for (int rr = 0; rr < r.params.rows(); ++rr) {
+                        result.params[rr] = { r.params(rr,0), r.params(rr,1), r.params(rr,2), r.params(rr,3) };
+                    }
+                    result.coeffs.resize(r.coeffs.size());
+                    for (int k = 0; k < r.coeffs.size(); ++k) result.coeffs[k] = r.coeffs[k];
+                    result.signal.resize(r.signal.size());
+                    for (int k = 0; k < r.signal.size(); ++k) result.signal[k] = r.signal[k];
+                    result.residue.resize(r.residue.size());
+                    for (int k = 0; k < r.residue.size(); ++k) result.residue[k] = r.residue[k];
+                    result.approx.resize(r.approx.size());
+                    for (int k = 0; k < r.approx.size(); ++k) result.approx[k] = r.approx[k];
+                    result.error = r.error;
+                } else {
+                    ACT_CPU::TransformOptions opts; opts.order = TRANSFORM_ORDER; opts.refine = false; opts.residual_threshold = 1e-6;
+                    Eigen::Map<const Eigen::VectorXd> x(s.data(), (int)s.size());
+                    ACT_CPU::TransformResult r;
+                    if (act_accel) r = act_accel->transform(x, opts);
+                    else if (act_mlx) r = act_mlx->transform(x, opts);
+                    else r = act_cpu->transform(x, opts);
+                    result.params.resize(r.params.rows());
+                    for (int rr = 0; rr < r.params.rows(); ++rr) {
+                        result.params[rr] = { r.params(rr,0), r.params(rr,1), r.params(rr,2), r.params(rr,3) };
+                    }
+                    result.coeffs.resize(r.coeffs.size());
+                    for (int k = 0; k < r.coeffs.size(); ++k) result.coeffs[k] = r.coeffs[k];
+                    result.signal.resize(r.signal.size());
+                    for (int k = 0; k < r.signal.size(); ++k) result.signal[k] = r.signal[k];
+                    result.residue.resize(r.residue.size());
+                    for (int k = 0; k < r.residue.size(); ++k) result.residue[k] = r.residue[k];
+                    result.approx.resize(r.approx.size());
+                    for (int k = 0; k < r.approx.size(); ++k) result.approx[k] = r.approx[k];
+                    result.error = r.error;
+                }
+            } else {
+                std::cout << "  Full Transform with BFGS" << std::endl;
+                // Use vector overload
+                ACT::TransformResult result_tmp;
+                if (use_float) {
+                    std::vector<float> sf(test_signals[i].size());
+                    for (size_t j=0;j<sf.size();++j) sf[j] = static_cast<float>(test_signals[i][j]);
+                    ACT_CPU_f::TransformResult r = (act_accel_f ? act_accel_f->transform(sf, TRANSFORM_ORDER, 1e-6f)
+                                                                : (act_mlx_f ? act_mlx_f->transform(sf, TRANSFORM_ORDER, 1e-6f)
+                                                                              : act_cpu_f->transform(sf, TRANSFORM_ORDER, 1e-6f)));
+                    result.params.resize(r.params.rows());
+                    for (int rr = 0; rr < r.params.rows(); ++rr) result.params[rr] = { r.params(rr,0), r.params(rr,1), r.params(rr,2), r.params(rr,3) };
+                    result.coeffs.resize(r.coeffs.size());
+                    for (int k = 0; k < r.coeffs.size(); ++k) result.coeffs[k] = r.coeffs[k];
+                    result.signal.resize(r.signal.size());
+                    for (int k = 0; k < r.signal.size(); ++k) result.signal[k] = r.signal[k];
+                    result.residue.resize(r.residue.size());
+                    for (int k = 0; k < r.residue.size(); ++k) result.residue[k] = r.residue[k];
+                    result.approx.resize(r.approx.size());
+                    for (int k = 0; k < r.approx.size(); ++k) result.approx[k] = r.approx[k];
+                    result.error = r.error;
+                } else {
+                    ACT_CPU::TransformResult r = (act_accel ? act_accel->transform(test_signals[i], TRANSFORM_ORDER, 1e-6)
+                                                            : (act_mlx ? act_mlx->transform(test_signals[i], TRANSFORM_ORDER, 1e-6)
+                                                                       : act_cpu->transform(test_signals[i], TRANSFORM_ORDER, 1e-6)));
+                    result.params.resize(r.params.rows());
+                    for (int rr = 0; rr < r.params.rows(); ++rr) result.params[rr] = { r.params(rr,0), r.params(rr,1), r.params(rr,2), r.params(rr,3) };
+                    result.coeffs.resize(r.coeffs.size());
+                    for (int k = 0; k < r.coeffs.size(); ++k) result.coeffs[k] = r.coeffs[k];
+                    result.signal.resize(r.signal.size());
+                    for (int k = 0; k < r.signal.size(); ++k) result.signal[k] = r.signal[k];
+                    result.residue.resize(r.residue.size());
+                    for (int k = 0; k < r.residue.size(); ++k) result.residue[k] = r.residue[k];
+                    result.approx.resize(r.approx.size());
+                    for (int k = 0; k < r.approx.size(); ++k) result.approx[k] = r.approx[k];
+                    result.error = r.error;
+                }
+            }
+        }
         double transform_time = timer.elapsed_s();
         transform_times.push_back(transform_time * 1000);
         total_times.push_back(search_time + transform_time * 1000);
@@ -172,13 +381,21 @@ int main() {
         print_timing("  Full Transform", transform_time * 1000, 
                      std::to_string(TRANSFORM_ORDER) + " chirplets");
         
-        // Calculate SNR
+        // Calculate SNR (guard against size mismatches)
+        size_t n_signal = test_signals[i].size();
+        size_t n_residue = result.residue.size();
+        size_t n = std::min(n_signal, n_residue);
         double signal_energy = 0.0, residue_energy = 0.0;
-        for (size_t j = 0; j < test_signals[i].size(); ++j) {
-            signal_energy += test_signals[i][j] * test_signals[i][j];
-            residue_energy += result.residue[j] * result.residue[j];
+        if (n == 0) {
+            std::cerr << "Warning: empty or mismatched residue (signal=" << n_signal
+                      << ", residue=" << n_residue << ") — skipping SNR for this signal." << std::endl;
+        } else {
+            for (size_t j = 0; j < n; ++j) {
+                signal_energy += test_signals[i][j] * test_signals[i][j];
+                residue_energy += result.residue[j] * result.residue[j];
+            }
         }
-        double snr = 10.0 * std::log10(signal_energy / residue_energy);
+        double snr = (residue_energy > 0.0 ? 10.0 * std::log10(signal_energy / residue_energy) : 0.0);
         snr_values.push_back(snr);
         
         std::cout << "  SNR: " << std::fixed << std::setprecision(2) << snr << " dB" << std::endl;
@@ -236,7 +453,11 @@ int main() {
     }
     
     // Memory usage estimate
-    double dict_memory_mb = (actual_dict_size * SIGNAL_LENGTH * sizeof(double)) / (1024.0 * 1024.0);
+    size_t dict_bytes_per_elem = (std::getenv("ACT_PROFILE_PREC") &&
+                                  (std::string(std::getenv("ACT_PROFILE_PREC")) == "float" ||
+                                   std::string(std::getenv("ACT_PROFILE_PREC")) == "float32" ||
+                                   std::string(std::getenv("ACT_PROFILE_PREC")) == "f32")) ? sizeof(float) : sizeof(double);
+    double dict_memory_mb = (actual_dict_size * SIGNAL_LENGTH * dict_bytes_per_elem) / (1024.0 * 1024.0);
     std::cout << "Dictionary Memory Usage: " << std::setprecision(1) << dict_memory_mb << " MB" << std::endl;
     
     print_separator("OPTIMIZATION ANALYSIS");

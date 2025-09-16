@@ -20,7 +20,7 @@ static std::vector<double> generate_signal(int length, double fs) {
 }
 
 int main() {
-    std::cout << "=== ACT_MLX skeleton test (CPU fallback) ===\n";
+    std::cout << "=== ACT_MLX test (inherits Accelerate path) ===\n";
     try {
         double fs = 128.0;
         int length = 128;
@@ -33,9 +33,7 @@ int main() {
             -10.0, 10.0, 10.0 // c
         );
 
-        ACT_MLX act(fs, length, ranges, false, true);
-        // Leave MLX disabled for now (no MLX dependency required to run)
-        act.enable_mlx(false);
+        ACT_MLX act(fs, length, ranges, true);
 
         int dict_size = act.generate_chirplet_dictionary();
         std::cout << "Dictionary generated: " << dict_size << " atoms\n";
@@ -44,12 +42,12 @@ int main() {
         auto res = act.transform(sig, 2);
 
         std::cout << "Transform complete. Error=" << std::fixed << std::setprecision(6) << res.error << "\n";
-        std::cout << "Chirplets found: " << res.params.size() << "\n";
-        for (size_t i = 0; i < res.params.size(); ++i) {
-            std::cout << "  #" << (i+1) << ": tc=" << res.params[i][0]
-                      << ", fc=" << res.params[i][1]
-                      << ", logDt=" << res.params[i][2]
-                      << ", c=" << res.params[i][3]
+        std::cout << "Chirplets found: " << res.params.rows() << "\n";
+        for (int i = 0; i < res.params.rows(); ++i) {
+            std::cout << "  #" << (i+1) << ": tc=" << res.params(i,0)
+                      << ", fc=" << res.params(i,1)
+                      << ", logDt=" << res.params(i,2)
+                      << ", c=" << res.params(i,3)
                       << ", coeff=" << res.coeffs[i] << "\n";
         }
 

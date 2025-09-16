@@ -1,5 +1,4 @@
 #include "ACT.h"
-#include "ACT_SIMD.h"
 #include <iostream>
 #include <vector>
 #include <random>
@@ -54,12 +53,11 @@ int main() {
     }
     std::cout << " done.\n";
 
-    // 3) Load dictionary into ACT and ACT_SIMD
-    std::cout << "3) Loading dictionary into ACT and ACT_SIMD..." << std::flush;
+    // 3) Load dictionary into ACT
+    std::cout << "3) Loading dictionary into ACT..." << std::flush;
     auto act_loaded = ACT::load_dictionary<ACT>(dict_path);
-    auto simd_loaded = ACT::load_dictionary<ACT_SIMD>(dict_path);
-    if (!act_loaded || !simd_loaded) {
-        std::cerr << "\nERROR: Failed to load dictionary into ACT or ACT_SIMD." << std::endl;
+    if (!act_loaded) {
+        std::cerr << "\nERROR: Failed to load dictionary into ACT." << std::endl;
         return 1;
     }
     std::cout << " done.\n";
@@ -121,14 +119,11 @@ int main() {
     auto test_signal = generate_test_signal(LENGTH, FS);
     auto [idx_ref, val_ref] = act.search_dictionary(test_signal);
     auto [idx_ld,  val_ld ] = act_loaded->search_dictionary(test_signal);
-    auto [idx_simd, val_simd] = simd_loaded->search_dictionary(test_signal);
 
-    bool search_ok = (idx_ref == idx_ld) && nearly_equal(val_ref, val_ld, 1e-9) &&
-                     (idx_ref == idx_simd) && nearly_equal(val_ref, val_simd, 1e-9);
+    bool search_ok = (idx_ref == idx_ld) && nearly_equal(val_ref, val_ld, 1e-9);
     if (!search_ok) {
         std::cerr << "\nERROR: Search mismatch: ref(" << idx_ref << "," << val_ref
-                  << ") vs act_loaded(" << idx_ld << "," << val_ld
-                  << ") vs simd_loaded(" << idx_simd << "," << val_simd << ")" << std::endl;
+                  << ") vs act_loaded(" << idx_ld << "," << val_ld << ")" << std::endl;
         return 1;
     }
     std::cout << " ok.\n";

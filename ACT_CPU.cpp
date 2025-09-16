@@ -12,6 +12,8 @@
 #include <limits>
 #include <stdexcept>
 
+#include "act_numeric.h"
+
 // BLAS headers
 #ifdef __APPLE__
 #include <Accelerate/Accelerate.h>
@@ -25,26 +27,42 @@
 using Eigen::VectorXd;
 using Eigen::MatrixXd;
 
-ACT_CPU::ACT_CPU(double FS, int length, const ParameterRanges& ranges, bool verbose)
+template <typename Scalar>
+ACT_CPU_T<Scalar>::ACT_CPU_T(double FS, int length, const ParameterRanges& ranges, bool verbose)
     : FS(FS), length(length), param_ranges(ranges), verbose(verbose), dict_mat(), param_mat(), dict_size(0) {
     if (verbose) {
         std::cout << "\n===============================================\n";
         std::cout << "INITIALIZING ACT_CPU (Eigen + CBLAS)\n";
         std::cout << "===============================================\n\n";
+        std::cout << "FS: " << FS << " Hz, length: " << length << "\n";
+        std::cout << "Param ranges: "
+                  << "tc[" << param_ranges.tc_min << "," << param_ranges.tc_max << "] step=" << param_ranges.tc_step << "; "
+                  << "fc[" << param_ranges.fc_min << "," << param_ranges.fc_max << "] step=" << param_ranges.fc_step << "; "
+                  << "logDt[" << param_ranges.logDt_min << "," << param_ranges.logDt_max << "] step=" << param_ranges.logDt_step << "; "
+                  << "c[" << param_ranges.c_min << "," << param_ranges.c_max << "] step=" << param_ranges.c_step << "\n";
+#ifdef __APPLE__
+        std::cout << "BLAS: Apple Accelerate (vecLib)\n";
+#else
+        std::cout << "BLAS: CBLAS (system)\n";
+#endif
+        std::cout << std::endl;
     }
 }
 
-ACT_CPU::~ACT_CPU() {
+template <typename Scalar>
+ACT_CPU_T<Scalar>::~ACT_CPU_T() {
 }
 
-VectorXd ACT_CPU::time_vector_seconds() const {
-    VectorXd t(length);
-    double invFS = 1.0 / FS;
-    for (int i = 0; i < length; ++i) t[i] = static_cast<double>(i) * invFS;
+template <typename Scalar>
+act::VecX<Scalar> ACT_CPU_T<Scalar>::time_vector_seconds() const {
+    act::VecX<Scalar> t(length);
+    Scalar invFS = Scalar(1) / Scalar(FS);
+    for (int i = 0; i < length; ++i) t[i] = Scalar(i) * invFS;
     return t;
 }
 
-VectorXd ACT_CPU::linspace(double start, double end, double step) const {
+template <typename Scalar>
+VectorXd ACT_CPU_T<Scalar>::linspace(double start, double end, double step) const {
     std::vector<double> vals;
     if (step <= 0) return Eigen::VectorXd();
     for (double v = start; v <= end; v += step) vals.push_back(v);
@@ -53,10 +71,11 @@ VectorXd ACT_CPU::linspace(double start, double end, double step) const {
     return out;
 }
 
-VectorXd ACT_CPU::g(double tc, double fc, double logDt, double c) const {
+template <typename Scalar>
+act::VecX<Scalar> ACT_CPU_T<Scalar>::g(double tc, double fc, double logDt, double c) const {
     // Bounds and stability checks
     if (std::isnan(tc) || std::isnan(fc) || std::isnan(logDt) || std::isnan(c)) {
-        return VectorXd::Zero(length);
+        return act::VecX<Scalar>::Zero(length);
     }
     logDt = std::max(-10.0, std::min(2.0, logDt));
 
@@ -64,63 +83,33 @@ VectorXd ACT_CPU::g(double tc, double fc, double logDt, double c) const {
     double tc_sec = tc / FS;
 
     double Dt = std::exp(logDt);
-    if (Dt < 1e-10 || Dt > 100.0) return VectorXd::Zero(length);
+    if (Dt < 1e-10 || Dt > 100.0) return act::VecX<Scalar>::Zero(length);
 
-    VectorXd t = time_vector_seconds();
-    VectorXd time_diff = t.array() - tc_sec;
+    act::VecX<Scalar> t = time_vector_seconds();
+    act::VecX<Scalar> time_diff = t.array() - Scalar(tc_sec);
 
     // Gaussian window
-    VectorXd exponent = (-0.5 * (time_diff.array() / Dt).square()).matrix();
+    act::VecX<Scalar> exponent = (Scalar(-0.5) * (time_diff.array() / Scalar(Dt)).square()).matrix();
     for (int i = 0; i < exponent.size(); ++i) if (exponent[i] < -50.0) exponent[i] = -50.0;
 
-    VectorXd gaussian_window(exponent.size());
-#ifdef __APPLE__
-    {
-        int n = exponent.size();
-        vvexp(gaussian_window.data(), exponent.data(), &n);
-    }
-#else
-    gaussian_window = exponent.array().exp().matrix();
-#endif
+    act::VecX<Scalar> gaussian_window = exponent.array().exp().matrix();
 
     // Phase and cosine
-    const double two_pi = 2.0 * M_PI;
-    VectorXd phase = (two_pi * (c * time_diff.array().square() + fc * time_diff.array())).matrix();
+    const Scalar two_pi = Scalar(2.0 * M_PI);
+    act::VecX<Scalar> phase = (two_pi * (Scalar(c) * time_diff.array().square() + Scalar(fc) * time_diff.array())).matrix();
 
-    VectorXd complex_exp(phase.size());
-#ifdef __APPLE__
-    {
-        int n = phase.size();
-        vvcos(complex_exp.data(), phase.data(), &n);
-    }
-#else
-    complex_exp = phase.array().cos().matrix();
-#endif
+    act::VecX<Scalar> complex_exp = phase.array().cos().matrix();
 
-    VectorXd chirplet(length);
-#ifdef __APPLE__
-    vDSP_vmulD(gaussian_window.data(), 1, complex_exp.data(), 1, chirplet.data(), 1, length);
-#else
-    chirplet = gaussian_window.array() * complex_exp.array();
-#endif
+    act::VecX<Scalar> chirplet = gaussian_window.array() * complex_exp.array();
 
     // Replace invalid entries
-    for (int i = 0; i < chirplet.size(); ++i) if (!std::isfinite(chirplet[i])) chirplet[i] = 0.0;
+    for (int i = 0; i < chirplet.size(); ++i) if (!std::isfinite(chirplet[i])) chirplet[i] = Scalar(0);
 
     // L2 normalize
-    double energy = 0.0;
-#ifdef __APPLE__
-    vDSP_dotprD(chirplet.data(), 1, chirplet.data(), 1, &energy, length);
-#else
-    energy = cblas_ddot(length, chirplet.data(), 1, chirplet.data(), 1);
-#endif
-    if (energy > 0.0) {
-        double inv_norm = 1.0 / std::sqrt(energy);
-#ifdef __APPLE__
-        vDSP_vsmulD(chirplet.data(), 1, &inv_norm, chirplet.data(), 1, length);
-#else
+    Scalar energy = act::blas::dot(length, chirplet.data(), 1, chirplet.data(), 1);
+    if (energy > Scalar(0)) {
+        Scalar inv_norm = Scalar(1) / Scalar(std::sqrt(static_cast<double>(energy)));
         for (int i = 0; i < chirplet.size(); ++i) chirplet[i] *= inv_norm;
-#endif
     } else {
         chirplet.setZero();
     }
@@ -128,7 +117,8 @@ VectorXd ACT_CPU::g(double tc, double fc, double logDt, double c) const {
     return chirplet;
 }
 
-int ACT_CPU::generate_chirplet_dictionary() {
+template <typename Scalar>
+int ACT_CPU_T<Scalar>::generate_chirplet_dictionary() {
     VectorXd tc_vals = linspace(param_ranges.tc_min, param_ranges.tc_max, param_ranges.tc_step);
     VectorXd fc_vals = linspace(param_ranges.fc_min, param_ranges.fc_max, param_ranges.fc_step);
     VectorXd logDt_vals = linspace(param_ranges.logDt_min, param_ranges.logDt_max, param_ranges.logDt_step);
@@ -163,7 +153,7 @@ int ACT_CPU::generate_chirplet_dictionary() {
                     double fc = fc_vals[ifc];
                     double logDt = logDt_vals[ilog];
                     double c = c_vals[ic];
-                    VectorXd atom = g(tc, fc, logDt, c);
+                    act::VecX<Scalar> atom = g(tc, fc, logDt, c);
                     dict_mat.col(cnt) = atom;
                     param_mat(cnt, 0) = tc;
                     param_mat(cnt, 1) = fc;
@@ -178,45 +168,49 @@ int ACT_CPU::generate_chirplet_dictionary() {
     return dict_size;
 }
 
-std::pair<int,double> ACT_CPU::search_dictionary(const Eigen::Ref<const VectorXd>& signal) const {
+template <typename Scalar>
+std::pair<int,Scalar> ACT_CPU_T<Scalar>::search_dictionary(const Eigen::Ref<const act::VecX<Scalar>>& signal) const {
     assert(signal.size() == length);
     if (dict_size == 0) return {0, 0.0};
 
-    VectorXd scores(dict_size);
+    act::VecX<Scalar> scores(dict_size);
     scores.setZero();
 
     const int m = length;
     const int n = dict_size;
-    const double alpha = 1.0;
-    const double beta = 0.0;
+    const Scalar alpha = Scalar(1);
+    const Scalar beta = Scalar(0);
 
     // scores = A^T * x  (A is m x n, column-major)
-    cblas_dgemv(CblasColMajor, CblasTrans, m, n, alpha,
-                dict_mat.data(), m,
-                signal.data(), 1,
-                beta, scores.data(), 1);
+    act::blas::gemv_colmajor_trans(m, n,
+                                   alpha,
+                                   dict_mat.data(), m,
+                                   signal.data(), 1,
+                                   beta, scores.data(), 1);
 
     // Find argmax
     int best_idx = 0;
-    double best_val = -std::numeric_limits<double>::infinity();
+    Scalar best_val = -std::numeric_limits<Scalar>::infinity();
     for (int i = 0; i < n; ++i) {
-        double v = scores[i];
+        Scalar v = scores[i];
         if (v > best_val) { best_val = v; best_idx = i; }
     }
     return {best_idx, best_val};
 }
 
-std::pair<int,double> ACT_CPU::search_dictionary(const std::vector<double>& sig) const {
+template <typename Scalar>
+std::pair<int,Scalar> ACT_CPU_T<Scalar>::search_dictionary(const std::vector<Scalar>& sig) const {
     assert(static_cast<int>(sig.size()) == length);
-    Eigen::Map<const VectorXd> x(sig.data(), length);
+    Eigen::Map<const act::VecX<Scalar>> x(sig.data(), length);
     return search_dictionary(x);
 }
 
 // Optimizer wrapper for ALGLIB (mirrors ACTOptimizer)
+template <typename Scalar>
 struct ACTCPU_Optimizer {
-    const ACT_CPU* act;
-    VectorXd signal;
-    ACTCPU_Optimizer(const ACT_CPU* a, const VectorXd& s) : act(a), signal(s) {}
+    const ACT_CPU_T<Scalar>* act;
+    act::VecX<Scalar> signal;
+    ACTCPU_Optimizer(const ACT_CPU_T<Scalar>* a, const act::VecX<Scalar>& s) : act(a), signal(s) {}
     static void func(const alglib::real_1d_array &x, double &f, void *ptr) {
         std::vector<double> params(4);
         for (int i = 0; i < 4; ++i) params[i] = x[i];
@@ -225,8 +219,9 @@ struct ACTCPU_Optimizer {
     }
 };
 
-Eigen::VectorXd ACT_CPU::bfgs_optimize(const Eigen::Vector4d& initial_params,
-                                       const Eigen::Ref<const VectorXd>& signal) const {
+template <typename Scalar>
+Eigen::VectorXd ACT_CPU_T<Scalar>::bfgs_optimize(const Eigen::Vector4d& initial_params,
+                                       const Eigen::Ref<const act::VecX<Scalar>>& signal) const {
     try {
         alglib::minbcstate state;
         alglib::minbcreport rep;
@@ -254,13 +249,13 @@ Eigen::VectorXd ACT_CPU::bfgs_optimize(const Eigen::Vector4d& initial_params,
             if (x[i] > bndu[i]) x[i] = bndu[i] - 1e-6;
         }
 
-        ACTCPU_Optimizer opt(this, signal);
+        ACTCPU_Optimizer<Scalar> opt(this, signal);
         alglib::minbccreatef(x, 1e-6, state);
         alglib::minbcsetbc(state, bndl, bndu);
         alglib::minbcsetcond(state, 1e-5, 0, 0, 100);
         alglib::minbcsetxrep(state, false);
 
-        alglib::minbcoptimize(state, ACTCPU_Optimizer::func, nullptr, &opt);
+        alglib::minbcoptimize(state, ACTCPU_Optimizer<Scalar>::func, nullptr, &opt);
         alglib::minbcresults(state, x, rep);
 
         if (rep.terminationtype > 0) {
@@ -274,20 +269,41 @@ Eigen::VectorXd ACT_CPU::bfgs_optimize(const Eigen::Vector4d& initial_params,
     return initial_params;
 }
 
-ACT_CPU::TransformResult ACT_CPU::transform(const Eigen::Ref<const VectorXd>& signal,
+template <typename Scalar>
+typename ACT_CPU_T<Scalar>::TransformResultT ACT_CPU_T<Scalar>::transform(const Eigen::Ref<const act::VecX<Scalar>>& signal,
                                             int order, double residual_threshold) const {
+    TransformOptions opts;
+    opts.order = order;
+    opts.residual_threshold = residual_threshold;
+    opts.refine = true;
+    return transform(signal, opts);
+}
+
+template <typename Scalar>
+typename ACT_CPU_T<Scalar>::TransformResultT ACT_CPU_T<Scalar>::transform(const std::vector<Scalar>& sig,
+                                            int order, double residual_threshold) const {
+    assert(static_cast<int>(sig.size()) == length);
+    Eigen::Map<const act::VecX<Scalar>> x(sig.data(), length);
+    return transform(x, order, residual_threshold);
+}
+
+template <typename Scalar>
+typename ACT_CPU_T<Scalar>::TransformResultT ACT_CPU_T<Scalar>::transform(
+    const Eigen::Ref<const act::VecX<Scalar>>& signal,
+    const TransformOptions& options) const {
     if (dict_size == 0 || dict_mat.cols() != dict_size || param_mat.rows() != dict_size) {
         throw std::runtime_error("ACT_CPU::transform called without a ready dictionary.");
     }
 
-    TransformResult result;
-    result.params = Eigen::Matrix<double, Eigen::Dynamic, 4, Eigen::RowMajor>(order, 4);
-    result.coeffs = VectorXd::Zero(order);
+    TransformResultT result;
+    const int order = options.order;
+    result.params = act::ParamsMat<Scalar>(order, 4);
+    result.coeffs = act::VecX<Scalar>::Zero(order);
     result.signal = signal;
-    result.approx = VectorXd::Zero(length);
+    result.approx = act::VecX<Scalar>::Zero(length);
     result.residue = signal;
 
-    double prev_resid_norm2 = std::numeric_limits<double>::max();
+    Scalar prev_resid_norm2 = std::numeric_limits<Scalar>::max();
 
     for (int i = 0; i < order; ++i) {
         // Coarse search via GEMV
@@ -300,49 +316,36 @@ ACT_CPU::TransformResult ACT_CPU::transform(const Eigen::Ref<const VectorXd>& si
         init[2] = param_mat(ind, 2);
         init[3] = param_mat(ind, 3);
 
-        // Refine with BFGS
-        Eigen::Vector4d refined = bfgs_optimize(init, result.residue);
+        // Optionally refine with BFGS (runs in double internally)
+        Eigen::Vector4d refined;
+        if (options.refine) {
+            Eigen::VectorXd tmp = bfgs_optimize(init, result.residue);
+            refined = tmp.head<4>();
+        } else {
+            refined = init;
+        }
 
         // Atom and coefficient
-        VectorXd atom = g(refined[0], refined[1], refined[2], refined[3]);
+        act::VecX<Scalar> atom = g(refined[0], refined[1], refined[2], refined[3]);
 
-        double coeff = 0.0;
-#ifdef __APPLE__
-        vDSP_dotprD(atom.data(), 1, result.residue.data(), 1, &coeff, length);
-#else
-        coeff = cblas_ddot(length, atom.data(), 1, result.residue.data(), 1);
-#endif
+        Scalar coeff = dot(atom.data(), result.residue.data(), length);
 
         // Store
-        result.params.row(i) << refined[0], refined[1], refined[2], refined[3];
+        result.params.row(i) << Scalar(refined[0]), Scalar(refined[1]), Scalar(refined[2]), Scalar(refined[3]);
         result.coeffs[i] = coeff;
 
         // Update residue: residue -= coeff * atom
-        double alpha_neg = -coeff;
-#ifdef __APPLE__
-        // Use cblas_daxpy from Accelerate
-        cblas_daxpy(length, alpha_neg, atom.data(), 1, result.residue.data(), 1);
-#else
-        cblas_daxpy(length, alpha_neg, atom.data(), 1, result.residue.data(), 1);
-#endif
+        Scalar alpha_neg = -coeff;
+        axpy(length, alpha_neg, atom.data(), 1, result.residue.data(), 1);
 
         // Update approx: approx += coeff * atom
-        double alpha_pos = coeff;
-#ifdef __APPLE__
-        cblas_daxpy(length, alpha_pos, atom.data(), 1, result.approx.data(), 1);
-#else
-        cblas_daxpy(length, alpha_pos, atom.data(), 1, result.approx.data(), 1);
-#endif
+        Scalar alpha_pos = coeff;
+        axpy(length, alpha_pos, atom.data(), 1, result.approx.data(), 1);
 
         // Residual norm2
-        double resid_norm2 = 0.0;
-#ifdef __APPLE__
-        vDSP_dotprD(result.residue.data(), 1, result.residue.data(), 1, &resid_norm2, length);
-#else
-        resid_norm2 = cblas_ddot(length, result.residue.data(), 1, result.residue.data(), 1);
-#endif
+        Scalar resid_norm2 = act::blas::dot(length, result.residue.data(), 1, result.residue.data(), 1);
 
-        if (prev_resid_norm2 - resid_norm2 < residual_threshold) {
+        if (static_cast<double>(prev_resid_norm2 - resid_norm2) < options.residual_threshold) {
             // shrink matrices/vectors to i+1
             result.params.conservativeResize(i+1, 4);
             result.coeffs.conservativeResize(i+1);
@@ -352,44 +355,29 @@ ACT_CPU::TransformResult ACT_CPU::transform(const Eigen::Ref<const VectorXd>& si
     }
 
     // Final error as L2 norm of residue
-    double resid_norm2 = 0.0;
-#ifdef __APPLE__
-    vDSP_dotprD(result.residue.data(), 1, result.residue.data(), 1, &resid_norm2, length);
-#else
-    resid_norm2 = cblas_ddot(length, result.residue.data(), 1, result.residue.data(), 1);
-#endif
-    result.error = std::sqrt(resid_norm2);
+    Scalar resid_norm2 = act::blas::dot(length, result.residue.data(), 1, result.residue.data(), 1);
+    result.error = static_cast<Scalar>(std::sqrt(static_cast<double>(resid_norm2)));
 
     return result;
 }
 
-ACT_CPU::TransformResult ACT_CPU::transform(const std::vector<double>& sig,
-                                            int order, double residual_threshold) const {
-    assert(static_cast<int>(sig.size()) == length);
-    Eigen::Map<const VectorXd> x(sig.data(), length);
-    return transform(x, order, residual_threshold);
-}
-
-double ACT_CPU::minimize_this(const std::vector<double>& params,
-                              const Eigen::Ref<const VectorXd>& signal) const {
+template <typename Scalar>
+double ACT_CPU_T<Scalar>::minimize_this(const std::vector<double>& params,
+                              const Eigen::Ref<const act::VecX<Scalar>>& signal) const {
     for (double p : params) {
         if (std::isnan(p) || std::isinf(p)) return 1e10;
     }
-    VectorXd atom = g(params[0], params[1], params[2], params[3]);
+    act::VecX<Scalar> atom = g(params[0], params[1], params[2], params[3]);
     if (atom.size() == 0) return 1e10;
-    double prod = 0.0;
-#ifdef __APPLE__
-    vDSP_dotprD(atom.data(), 1, signal.data(), 1, &prod, length);
-#else
-    prod = cblas_ddot(length, atom.data(), 1, signal.data(), 1);
-#endif
+    Scalar prod = dot(atom.data(), signal.data(), length);
     if (!std::isfinite(prod)) return 1e10;
-    double result = -std::abs(prod);
+    double result = -std::abs(static_cast<double>(prod));
     if (!std::isfinite(result)) return 1e10;
     return result;
 }
 
-bool ACT_CPU::save_dictionary(const std::string& file_path) const {
+template <typename Scalar>
+bool ACT_CPU_T<Scalar>::save_dictionary(const std::string& file_path) const {
     std::ofstream file(file_path, std::ios::binary);
     if (!file.is_open()) return false;
 
@@ -420,7 +408,8 @@ bool ACT_CPU::save_dictionary(const std::string& file_path) const {
     // dict_mat: write columns as contiguous length blocks to match ACT format
     VectorXd tmp(length);
     for (int i = 0; i < dict_size; ++i) {
-        tmp = dict_mat.col(i);
+        // Cast to double to preserve file format regardless of Scalar
+        tmp = dict_mat.col(i).template cast<double>();
         file.write(reinterpret_cast<const char*>(tmp.data()), length * sizeof(double));
     }
 
@@ -433,7 +422,18 @@ bool ACT_CPU::save_dictionary(const std::string& file_path) const {
     return file.good();
 }
 
-bool ACT_CPU::load_dictionary_data_from_stream(std::istream& file, ACT_CPU& instance) {
+template <typename Scalar>
+Scalar ACT_CPU_T<Scalar>::dot(const Scalar* a, const Scalar* b, int n) const {
+    return act::blas::dot(n, a, 1, b, 1);
+}
+
+template <typename Scalar>
+void ACT_CPU_T<Scalar>::axpy(int n, Scalar alpha, const Scalar* x, int incx, Scalar* y, int incy) const {
+    act::blas::axpy(n, alpha, x, incx, y, incy);
+}
+
+template <typename Scalar>
+bool ACT_CPU_T<Scalar>::load_dictionary_data_from_stream(std::istream& file, ACT_CPU_T<Scalar>& instance) {
     char magic[8] = {0};
     uint32_t version = 0;
     file.read(reinterpret_cast<char*>(magic), sizeof(magic));
@@ -469,7 +469,8 @@ bool ACT_CPU::load_dictionary_data_from_stream(std::istream& file, ACT_CPU& inst
     VectorXd tmp(instance.length);
     for (int i = 0; i < instance.dict_size; ++i) {
         file.read(reinterpret_cast<char*>(tmp.data()), instance.length * sizeof(double));
-        instance.dict_mat.col(i) = tmp;
+        // Cast to Scalar for storage in templated dictionary
+        instance.dict_mat.col(i) = tmp.template cast<Scalar>();
     }
     // Read param rows
     for (int i = 0; i < instance.dict_size; ++i) {
@@ -483,3 +484,8 @@ bool ACT_CPU::load_dictionary_data_from_stream(std::istream& file, ACT_CPU& inst
 
     return file.good();
 }
+
+// Explicit instantiation for double (default backend)
+template class ACT_CPU_T<double>;
+// Explicit instantiation for float (float32 backend)
+template class ACT_CPU_T<float>;

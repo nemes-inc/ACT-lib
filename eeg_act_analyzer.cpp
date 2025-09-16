@@ -1,4 +1,7 @@
-#include "ACT_SIMD.h"
+#include "ACT.h"
+#include "ACT_CPU.h"
+#include "ACT_Accelerate.h"
+#include "ACT_MLX.h"
 #include <iostream>
 #include <fstream>
 #include <sstream>
@@ -10,6 +13,7 @@
 #include <memory>
 #include <cmath>
 #include "linenoise.h"
+#include <chrono>
 
 // --- Global State ---
 static std::vector<std::vector<double>> csv_data;
@@ -18,7 +22,14 @@ static std::vector<std::string> csv_headers;
 static int selected_column_index = -1;
 static int start_sample = 0;
 static ACT::ParameterRanges param_ranges;
-static std::unique_ptr<ACT_SIMD> act_analyzer;
+// Backends
+enum class BackendSel { ACT, CPU, ACCEL, MLX };
+static BackendSel backend_sel = BackendSel::CPU; // default
+static std::unique_ptr<ACT> act_legacy;           // Legacy ACT
+static std::unique_ptr<ACT_CPU> act_cpu;          // ACT_CPU (double)
+static std::unique_ptr<ACT_Accelerate> act_accel; // ACT_Accelerate (double)
+static std::unique_ptr<ACT_Accelerate_f> act_accel_f; // Float32 path (MLX or Accelerate_f)
+static bool coarse_only = false;                  // skip BFGS if true
 static double sampling_frequency = 256.0; // Default Muse sampling rate
 static std::string current_filename;
 
@@ -83,6 +94,21 @@ int main() {
             handle_select_data(args);
         } else if (command == "params") {
             handle_set_params(args);
+        } else if (command == "backend") {
+            if (args.size() != 1) { std::cout << "Usage: backend <act|cpu|accel|mlx>" << std::endl; continue; }
+            std::string b = args[0];
+            if (b == "act") backend_sel = BackendSel::ACT;
+            else if (b == "cpu") backend_sel = BackendSel::CPU;
+            else if (b == "accel") backend_sel = BackendSel::ACCEL;
+            else if (b == "mlx") backend_sel = BackendSel::MLX;
+            else { std::cout << "Unknown backend. Use act|cpu|accel|mlx" << std::endl; continue; }
+            // Clear any existing instances
+            act_legacy.reset(); act_cpu.reset(); act_accel.reset(); act_accel_f.reset();
+            std::cout << "Backend set to '" << b << "'." << std::endl;
+        } else if (command == "coarse_only") {
+            if (args.size() != 1) { std::cout << "Usage: coarse_only <0|1>" << std::endl; continue; }
+            coarse_only = (args[0] == "1" || args[0] == "true" || args[0] == "TRUE");
+            std::cout << "Coarse-only set to " << (coarse_only ? "ON" : "OFF") << std::endl;
         } else if (command == "create_dictionary") {
             handle_create_dictionary(args);
         } else if (command == "save_dictionary") {
@@ -334,15 +360,45 @@ void handle_create_dictionary(const std::vector<std::string>& /*args*/) {
 
     std::cout << "Creating dictionary in memory..." << std::endl;
     try {
-        act_analyzer = std::make_unique<ACT_SIMD>(
-            sampling_frequency,
-            static_cast<int>(selected_signal.size()),
-            param_ranges,
-            false,  // complex_mode
-            false   // verbose
-        );
-        int size = act_analyzer->generate_chirplet_dictionary();
-        std::cout << "Dictionary created successfully. Size=" << size << std::endl;
+        int len = static_cast<int>(selected_signal.size());
+        // Build per-backend
+        act_legacy.reset(); act_cpu.reset(); act_accel.reset(); act_accel_f.reset();
+        if (backend_sel == BackendSel::ACT) {
+            act_legacy.reset(new ACT(sampling_frequency, len, param_ranges, false, false));
+            int size = act_legacy->generate_chirplet_dictionary();
+            std::cout << "Dictionary created (ACT). Size=" << size << std::endl;
+        } else if (backend_sel == BackendSel::MLX) {
+            // MLX float32 path uses float ParameterRanges
+            ACT_CPU_f::ParameterRanges cpu_ranges_f(
+                param_ranges.tc_min, param_ranges.tc_max, param_ranges.tc_step,
+                param_ranges.fc_min, param_ranges.fc_max, param_ranges.fc_step,
+                param_ranges.logDt_min, param_ranges.logDt_max, param_ranges.logDt_step,
+                param_ranges.c_min, param_ranges.c_max, param_ranges.c_step
+            );
+            act_accel_f.reset(new ACT_MLX_f(sampling_frequency, len, cpu_ranges_f, true));
+            int size = act_accel_f->generate_chirplet_dictionary();
+            std::cout << "Dictionary created (MLX). Size=" << size << std::endl;
+        } else if (backend_sel == BackendSel::ACCEL) {
+            ACT_CPU::ParameterRanges cpu_ranges(
+                param_ranges.tc_min, param_ranges.tc_max, param_ranges.tc_step,
+                param_ranges.fc_min, param_ranges.fc_max, param_ranges.fc_step,
+                param_ranges.logDt_min, param_ranges.logDt_max, param_ranges.logDt_step,
+                param_ranges.c_min, param_ranges.c_max, param_ranges.c_step
+            );
+            act_accel.reset(new ACT_Accelerate(sampling_frequency, len, cpu_ranges, false));
+            int size = act_accel->generate_chirplet_dictionary();
+            std::cout << "Dictionary created (ACCEL). Size=" << size << std::endl;
+        } else { // CPU
+            ACT_CPU::ParameterRanges cpu_ranges(
+                param_ranges.tc_min, param_ranges.tc_max, param_ranges.tc_step,
+                param_ranges.fc_min, param_ranges.fc_max, param_ranges.fc_step,
+                param_ranges.logDt_min, param_ranges.logDt_max, param_ranges.logDt_step,
+                param_ranges.c_min, param_ranges.c_max, param_ranges.c_step
+            );
+            act_cpu.reset(new ACT_CPU(sampling_frequency, len, cpu_ranges, false));
+            int size = act_cpu->generate_chirplet_dictionary();
+            std::cout << "Dictionary created (CPU). Size=" << size << std::endl;
+        }
         print_dict_summary();
     } catch (const std::exception& e) {
         std::cerr << "Error creating dictionary: " << e.what() << std::endl;
@@ -350,7 +406,7 @@ void handle_create_dictionary(const std::vector<std::string>& /*args*/) {
 }
 
 void handle_save_dictionary(const std::vector<std::string>& args) {
-    if (!act_analyzer) {
+    if (!act_legacy && !act_cpu && !act_accel && !act_accel_f) {
         std::cout << "No dictionary in memory. Use 'create_dictionary' or 'load_dictionary' first." << std::endl;
         return;
     }
@@ -360,7 +416,12 @@ void handle_save_dictionary(const std::vector<std::string>& args) {
     }
     const std::string& path = args[0];
     std::cout << "Saving dictionary to '" << path << "'..." << std::flush;
-    if (act_analyzer->save_dictionary(path)) {
+    bool ok = false;
+    if (act_legacy) ok = act_legacy->save_dictionary(path);
+    else if (act_cpu) ok = act_cpu->save_dictionary(path);
+    else if (act_accel_f) ok = act_accel_f->save_dictionary(path);
+    else if (act_accel) ok = act_accel->save_dictionary(path);
+    if (ok) {
         std::cout << " done." << std::endl;
     } else {
         std::cout << " FAILED." << std::endl;
@@ -374,19 +435,33 @@ void handle_load_dictionary(const std::vector<std::string>& args) {
     }
     const std::string& path = args[0];
     std::cout << "Loading dictionary from '" << path << "'..." << std::flush;
-    auto loaded = ACT::load_dictionary<ACT_SIMD>(path, false);
-    if (!loaded) {
+    act_legacy.reset(); act_cpu.reset(); act_accel.reset(); act_accel_f.reset();
+    bool ok = false;
+    if (backend_sel == BackendSel::ACT) {
+        auto loaded = ACT::load_dictionary<ACT>(path, false);
+        if (loaded) { act_legacy = std::move(loaded); ok = true; }
+    } else if (backend_sel == BackendSel::MLX) {
+        // Load as CPU-style dictionary into MLX float backend
+        auto loaded = ACT_CPU_f::load_dictionary<ACT_MLX_f>(path, false);
+        if (loaded) { act_accel_f = std::move(loaded); ok = true; }
+    } else if (backend_sel == BackendSel::ACCEL) {
+        auto loaded = ACT_CPU::load_dictionary<ACT_Accelerate>(path, false);
+        if (loaded) { act_accel = std::move(loaded); ok = true; }
+    } else { // CPU
+        auto loaded = ACT_CPU::load_dictionary<ACT_CPU>(path, false);
+        if (loaded) { act_cpu = std::move(loaded); ok = true; }
+    }
+    if (!ok) {
         std::cout << " FAILED." << std::endl;
         std::cerr << "\nError: Could not load dictionary from file." << std::endl;
         return;
     }
-    act_analyzer = std::move(loaded);
     std::cout << " done." << std::endl;
     print_dict_summary();
 }
 
 void handle_analyze(const std::vector<std::string>& args) {
-    if (!act_analyzer) {
+    if (!act_legacy && !act_cpu && !act_accel && !act_accel_f) {
         std::cout << "Dictionary not created. Use 'create_dictionary' first." << std::endl;
         return;
     }
@@ -412,10 +487,64 @@ void handle_analyze(const std::vector<std::string>& args) {
         }
 
         std::cout << "\nPerforming ACT analysis to find top " << num_chirplets << " chirplets..." << std::endl;
+        auto __analysis_t0 = std::chrono::high_resolution_clock::now();
 
-        auto result = act_analyzer->transform(selected_signal, num_chirplets, residual_threshold);
+        ACT::TransformResult result;
+        if (act_legacy) {
+            result = act_legacy->transform(selected_signal, num_chirplets, residual_threshold);
+        } else if (act_accel_f) {
+            if (coarse_only) {
+                ACT_CPU_f::TransformOptions opts; opts.order = num_chirplets; opts.refine = false; opts.residual_threshold = residual_threshold;
+                // Build a float view without extra allocation
+                std::vector<float> sf(selected_signal.size());
+                for (size_t j = 0; j < selected_signal.size(); ++j) sf[j] = static_cast<float>(selected_signal[j]);
+                Eigen::Map<const act::VecX<float>> xmap(sf.data(), (int)sf.size());
+                auto rf = act_accel_f->transform(xmap, opts);
+                // Convert
+                result.params.resize(rf.params.rows());
+                for (int rr = 0; rr < rf.params.rows(); ++rr) result.params[rr] = { rf.params(rr,0), rf.params(rr,1), rf.params(rr,2), rf.params(rr,3) };
+                result.coeffs.resize(rf.coeffs.size()); for (int k = 0; k < rf.coeffs.size(); ++k) result.coeffs[k] = rf.coeffs[k];
+                result.signal.resize(rf.signal.size()); for (int k = 0; k < rf.signal.size(); ++k) result.signal[k] = rf.signal[k];
+                result.residue.resize(rf.residue.size()); for (int k = 0; k < rf.residue.size(); ++k) result.residue[k] = rf.residue[k];
+                result.approx.resize(rf.approx.size()); for (int k = 0; k < rf.approx.size(); ++k) result.approx[k] = rf.approx[k];
+                result.error = rf.error;
+            } else {
+                std::vector<float> sf(selected_signal.size());
+                for (size_t j = 0; j < selected_signal.size(); ++j) sf[j] = static_cast<float>(selected_signal[j]);
+                auto rf = act_accel_f->transform(sf, num_chirplets, static_cast<float>(residual_threshold));
+                result.params.resize(rf.params.rows());
+                for (int rr = 0; rr < rf.params.rows(); ++rr) result.params[rr] = { rf.params(rr,0), rf.params(rr,1), rf.params(rr,2), rf.params(rr,3) };
+                result.coeffs.resize(rf.coeffs.size()); for (int k = 0; k < rf.coeffs.size(); ++k) result.coeffs[k] = rf.coeffs[k];
+                result.signal.resize(rf.signal.size()); for (int k = 0; k < rf.signal.size(); ++k) result.signal[k] = rf.signal[k];
+                result.residue.resize(rf.residue.size()); for (int k = 0; k < rf.residue.size(); ++k) result.residue[k] = rf.residue[k];
+                result.approx.resize(rf.approx.size()); for (int k = 0; k < rf.approx.size(); ++k) result.approx[k] = rf.approx[k];
+                result.error = rf.error;
+            }
+        } else {
+            ACT_CPU::TransformResult r;
+            if (coarse_only) {
+                ACT_CPU::TransformOptions opts; opts.order = num_chirplets; opts.refine = false; opts.residual_threshold = residual_threshold;
+                Eigen::Map<const Eigen::VectorXd> x(selected_signal.data(), (int)selected_signal.size());
+                r = (act_accel ? act_accel->transform(x, opts) : act_cpu->transform(x, opts));
+            } else {
+                r = (act_accel ? act_accel->transform(selected_signal, num_chirplets, residual_threshold)
+                               : act_cpu->transform(selected_signal, num_chirplets, residual_threshold));
+            }
+            // Convert to ACT::TransformResult
+            result.params.resize(r.params.rows());
+            for (int i = 0; i < r.params.rows(); ++i) result.params[i] = { r.params(i,0), r.params(i,1), r.params(i,2), r.params(i,3) };
+            result.coeffs.resize(r.coeffs.size()); for (int k = 0; k < r.coeffs.size(); ++k) result.coeffs[k] = r.coeffs[k];
+            result.signal.resize(r.signal.size()); for (int k = 0; k < r.signal.size(); ++k) result.signal[k] = r.signal[k];
+            result.residue.resize(r.residue.size()); for (int k = 0; k < r.residue.size(); ++k) result.residue[k] = r.residue[k];
+            result.approx.resize(r.approx.size()); for (int k = 0; k < r.approx.size(); ++k) result.approx[k] = r.approx[k];
+            result.error = r.error;
+        }
         
+        double __analysis_ms = std::chrono::duration_cast<std::chrono::microseconds>(
+                                   std::chrono::high_resolution_clock::now() - __analysis_t0
+                               ).count() / 1000.0;
         std::cout << "\n--- Analysis Results ---" << std::endl;
+        std::cout << "Analysis Time: " << std::fixed << std::setprecision(2) << __analysis_ms << " ms" << std::endl;
         std::cout << "Final Error: " << result.error << std::endl;
         std::cout << "Number of chirplets: " << result.params.size() << std::endl;
         std::cout << "------------------------" << std::endl;
@@ -463,7 +592,7 @@ void print_estimated_size() {
     int c_count = static_cast<int>((param_ranges.c_max - param_ranges.c_min) / param_ranges.c_step) + 1;
 
     long long dict_size = (long long)tc_count * fc_count * logDt_count * c_count;
-    double mem_size_mb = (dict_size * selected_signal.size() * sizeof(float)) / (1024.0 * 1024.0);
+    double mem_size_mb = (dict_size * selected_signal.size() * sizeof(double)) / (1024.0 * 1024.0);
 
     std::cout << "\n--- Estimated Dictionary Size ---" << std::endl;
     std::cout << "Chirplets: " << dict_size << std::endl;
@@ -489,7 +618,7 @@ void print_analysis_results(const ACT::TransformResult& result, int time_offset)
 }
 
 void handle_analyze_samples(const std::vector<std::string>& args) {
-    if (!act_analyzer) {
+    if (!act_legacy && !act_cpu && !act_accel) {
         std::cout << "Dictionary not created. Use 'create_dictionary' first." << std::endl;
         return;
     }
@@ -519,7 +648,11 @@ void handle_analyze_samples(const std::vector<std::string>& args) {
             }
         }
 
-        int window_size = act_analyzer->get_dictionary_length();
+        int window_size = 0;
+        if (act_legacy) window_size = act_legacy->get_dictionary_length();
+        else if (act_cpu) window_size = act_cpu->get_length();
+        else if (act_accel_f) window_size = act_accel_f->get_length();
+        else if (act_accel) window_size = act_accel->get_length();
 
         if (end_sample <= start_sample || overlap < 0 || overlap >= window_size) {
             std::cout << "Invalid arguments. End sample must be after start sample, and overlap must be less than window size." << std::endl;
@@ -566,7 +699,53 @@ void handle_analyze_samples(const std::vector<std::string>& args) {
             }
             std::cout << "[DEBUG]   DC offset removed. Calling transform..." << std::endl;
 
-            auto result = act_analyzer->transform(cleaned_window, num_chirps);
+            ACT::TransformResult result;
+            if (act_legacy) {
+                result = act_legacy->transform(cleaned_window, num_chirps);
+            } else if (act_accel_f) {
+                if (coarse_only) {
+                    ACT_CPU_f::TransformOptions opts; opts.order = num_chirps; opts.refine = false; opts.residual_threshold = 1e-6f;
+                    std::vector<float> sf(cleaned_window.size());
+                    for (size_t j = 0; j < cleaned_window.size(); ++j) sf[j] = static_cast<float>(cleaned_window[j]);
+                    Eigen::Map<const act::VecX<float>> x_f(sf.data(), (int)sf.size());
+                    auto rf = act_accel_f->transform(x_f, opts);
+                    result.params.resize(rf.params.rows());
+                    for (int rr = 0; rr < rf.params.rows(); ++rr) result.params[rr] = { rf.params(rr,0), rf.params(rr,1), rf.params(rr,2), rf.params(rr,3) };
+                    result.coeffs.resize(rf.coeffs.size()); for (int k = 0; k < rf.coeffs.size(); ++k) result.coeffs[k] = rf.coeffs[k];
+                    result.signal.resize(rf.signal.size()); for (int k = 0; k < rf.signal.size(); ++k) result.signal[k] = rf.signal[k];
+                    result.residue.resize(rf.residue.size()); for (int k = 0; k < rf.residue.size(); ++k) result.residue[k] = rf.residue[k];
+                    result.approx.resize(rf.approx.size()); for (int k = 0; k < rf.approx.size(); ++k) result.approx[k] = rf.approx[k];
+                    result.error = rf.error;
+                } else {
+                    std::vector<float> sf(cleaned_window.size());
+                    for (size_t j = 0; j < cleaned_window.size(); ++j) sf[j] = static_cast<float>(cleaned_window[j]);
+                    auto rf = act_accel_f->transform(sf, num_chirps, 1e-6f);
+                    result.params.resize(rf.params.rows());
+                    for (int rr = 0; rr < rf.params.rows(); ++rr) result.params[rr] = { rf.params(rr,0), rf.params(rr,1), rf.params(rr,2), rf.params(rr,3) };
+                    result.coeffs.resize(rf.coeffs.size()); for (int k = 0; k < rf.coeffs.size(); ++k) result.coeffs[k] = rf.coeffs[k];
+                    result.signal.resize(rf.signal.size()); for (int k = 0; k < rf.signal.size(); ++k) result.signal[k] = rf.signal[k];
+                    result.residue.resize(rf.residue.size()); for (int k = 0; k < rf.residue.size(); ++k) result.residue[k] = rf.residue[k];
+                    result.approx.resize(rf.approx.size()); for (int k = 0; k < rf.approx.size(); ++k) result.approx[k] = rf.approx[k];
+                    result.error = rf.error;
+                }
+            } else {
+                ACT_CPU::TransformResult r;
+                if (coarse_only) {
+                    ACT_CPU::TransformOptions opts; opts.order = num_chirps; opts.refine = false; opts.residual_threshold = 1e-6;
+                    Eigen::Map<const Eigen::VectorXd> x(cleaned_window.data(), (int)cleaned_window.size());
+                    r = (act_accel ? act_accel->transform(x, opts) : act_cpu->transform(x, opts));
+                } else {
+                    r = (act_accel ? act_accel->transform(cleaned_window, num_chirps, 1e-6)
+                                   : act_cpu->transform(cleaned_window, num_chirps, 1e-6));
+                }
+                result.params.resize(r.params.rows());
+                for (int i = 0; i < r.params.rows(); ++i) result.params[i] = { r.params(i,0), r.params(i,1), r.params(i,2), r.params(i,3) };
+                result.coeffs.resize(r.coeffs.size()); for (int k = 0; k < r.coeffs.size(); ++k) result.coeffs[k] = r.coeffs[k];
+                result.signal.resize(r.signal.size()); for (int k = 0; k < r.signal.size(); ++k) result.signal[k] = r.signal[k];
+                result.residue.resize(r.residue.size()); for (int k = 0; k < r.residue.size(); ++k) result.residue[k] = r.residue[k];
+                result.approx.resize(r.approx.size()); for (int k = 0; k < r.approx.size(); ++k) result.approx[k] = r.approx[k];
+                result.error = r.error;
+            }
 
             std::cout << "--- Window starting at sample " << current_start << " ---" << std::endl;
             print_analysis_results(result, current_start);
@@ -663,7 +842,11 @@ void save_analysis_to_json(const std::string& filename, const ACT::TransformResu
         file << "  \"num_chirps\": " << num_chirps << ",\n";
         file << "  \"end_sample\": " << end_sample << ",\n";
         file << "  \"overlap\": " << overlap << ",\n";
-        file << "  \"window_size\": " << act_analyzer->get_dictionary_length() << ",\n";
+        int ws = 0;
+        if (act_legacy) ws = act_legacy->get_dictionary_length();
+        else if (act_cpu) ws = act_cpu->get_length();
+        else if (act_accel) ws = act_accel->get_length();
+        file << "  \"window_size\": " << ws << ",\n";
         file << "  \"window_start\": " << window_start << ",\n";
         file << "  \"result\": {\n";
         file << "    \"error\": " << result.error << ",\n";
@@ -727,7 +910,11 @@ void save_multiwindow_combined_to_json(
     }
     file << std::setprecision(12) << std::fixed;
 
-    int window_size = act_analyzer ? act_analyzer->get_dictionary_length() : (results.empty() ? 0 : (int)results.front().approx.size());
+    int window_size = 0;
+    if (act_legacy) window_size = act_legacy->get_dictionary_length();
+    else if (act_cpu) window_size = act_cpu->get_length();
+    else if (act_accel) window_size = act_accel->get_length();
+    else window_size = results.empty() ? 0 : (int)results.front().approx.size();
     int total_len = end_sample - start_sample;
     if (total_len < 0) total_len = 0;
 
@@ -806,6 +993,8 @@ void print_help() {
     std::cout << "  load_csv <filepath>                               - Load EEG data from a CSV file.\n";
     std::cout << "  select <column_idx> <start_sample> <num_samples>  - Select a signal segment for analysis.\n";
     std::cout << "  params <tc|fc|logDt|c> <min> <max> <step>       - Set parameter ranges for the dictionary.\n";
+    std::cout << "  backend <act|cpu|accel|mlx>                      - Select implementation backend.\n";
+    std::cout << "  coarse_only <0|1>                                - Toggle coarse-only (skip BFGS refinement) for CPU/ACCEL.\n";
     std::cout << "  create_dictionary                               - Generate a chirplet dictionary in memory.\n";
     std::cout << "  save_dictionary <filepath>                      - Save the in-memory dictionary to a file.\n";
     std::cout << "  load_dictionary <filepath>                      - Load a dictionary from a file and print its summary.\n";
@@ -816,21 +1005,36 @@ void print_help() {
 }
 
 void print_dict_summary() {
-    if (!act_analyzer) {
+    if (!act_legacy && !act_cpu && !act_accel && !act_accel_f) {
         std::cout << "No dictionary loaded/created." << std::endl;
         return;
     }
     std::cout << "\n--- Dictionary Summary ---" << std::endl;
-    std::cout << "FS: " << act_analyzer->get_FS() << " Hz" << std::endl;
-    std::cout << "Length: " << act_analyzer->get_length() << " samples" << std::endl;
-    std::cout << "Complex mode: " << (act_analyzer->get_complex_mode() ? "true" : "false") << std::endl;
-    const auto& pr = act_analyzer->get_param_ranges();
+    double fs = sampling_frequency; int length = 0; ACT::ParameterRanges pr = param_ranges; bool complex = false; const char* bname = "CPU";
+    if (act_legacy) {
+        fs = act_legacy->get_FS(); length = act_legacy->get_length(); complex = act_legacy->get_complex_mode(); pr = act_legacy->get_param_ranges(); bname = "ACT";
+    }
+    else if (act_cpu) {
+        fs = act_cpu->get_FS(); length = act_cpu->get_length(); pr = ACT::ParameterRanges(pr.tc_min, pr.tc_max, pr.tc_step, pr.fc_min, pr.fc_max, pr.fc_step, pr.logDt_min, pr.logDt_max, pr.logDt_step, pr.c_min, pr.c_max, pr.c_step); bname = "CPU";
+    }
+    else if (act_accel_f) {
+        fs = act_accel_f->get_FS(); length = act_accel_f->get_length(); pr = ACT::ParameterRanges(pr.tc_min, pr.tc_max, pr.tc_step, pr.fc_min, pr.fc_max, pr.fc_step, pr.logDt_min, pr.logDt_max, pr.logDt_step, pr.c_min, pr.c_max, pr.c_step);
+        bname = (backend_sel == BackendSel::MLX ? "MLX(f32)" : "ACCEL(f32)");
+    }
+    else if (act_accel) {
+        fs = act_accel->get_FS(); length = act_accel->get_length(); pr = ACT::ParameterRanges(pr.tc_min, pr.tc_max, pr.tc_step, pr.fc_min, pr.fc_max, pr.fc_step, pr.logDt_min, pr.logDt_max, pr.logDt_step, pr.c_min, pr.c_max, pr.c_step); bname = "ACCEL";
+    }
+    std::cout << "Backend: " << bname << std::endl;
+    std::cout << "FS: " << fs << " Hz" << std::endl;
+    std::cout << "Length: " << length << " samples" << std::endl;
+    std::cout << "Complex mode: " << (complex ? "true" : "false") << std::endl;
+    
     std::cout << "Parameter Ranges:" << std::endl;
     std::cout << "  tc: min=" << pr.tc_min << ", max=" << pr.tc_max << ", step=" << pr.tc_step << std::endl;
     std::cout << "  fc: min=" << pr.fc_min << ", max=" << pr.fc_max << ", step=" << pr.fc_step << std::endl;
     std::cout << "  logDt: min=" << pr.logDt_min << ", max=" << pr.logDt_max << ", step=" << pr.logDt_step << std::endl;
     std::cout << "  c: min=" << pr.c_min << ", max=" << pr.c_max << ", step=" << pr.c_step << std::endl;
-    std::cout << "Dictionary size: " << act_analyzer->get_dict_size() << std::endl;
+    int dsz = (act_legacy ? act_legacy->get_dict_size() : (act_cpu ? act_cpu->get_dict_size() : (act_accel_f ? act_accel_f->get_dict_size() : (act_accel ? act_accel->get_dict_size() : 0))));
+    std::cout << "Dictionary size: " << dsz << std::endl;
     std::cout << "--------------------------\n";
 }
-
