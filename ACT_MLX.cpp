@@ -55,10 +55,8 @@ std::pair<int, Scalar> ACT_MLX_T<Scalar>::search_dictionary(const Eigen::Ref<con
         const int m = this->get_length();
         const int n = this->get_dict_size();
 
-        // Upload signal as float32 1D array
-        std::vector<float> x_host(m);
-        for (int i = 0; i < m; ++i) x_host[i] = static_cast<float>(signal[i]);
-        mx::array x_arr(x_host.data(), mx::Shape{m}, mx::float32);
+        // Upload signal as float32 1D array directly from Eigen data (one host->device copy)
+        mx::array x_arr(const_cast<float*>(signal.data()), mx::Shape{m}, mx::float32);
 
         // scores = A^T x, where A is (m x n) row-major on device
         // Compute via matmul(transpose(A), x)
