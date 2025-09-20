@@ -22,7 +22,7 @@ class ActExtractorConfig:
 
 
 class ActFeatureExtractor:
-    """Wrapper around pyact.mpbfgs.ActEngine to compute ACT features per window.
+    """Wrapper around pyact.mpbfgs.ActMLXEngine to compute ACT features per window.
 
     Notes
     -----
@@ -39,7 +39,8 @@ class ActFeatureExtractor:
         self.cfg = config
 
         try:
-            from pyact.mpbfgs import ActEngine  # type: ignore
+            # Prefer MLX-capable backend (falls back to CPU path if MLX is not compiled)
+            from pyact.mpbfgs import ActMLXEngine  # type: ignore
         except Exception as e:  # pragma: no cover - import path
             raise ImportError(
                 "pyact.mpbfgs extension not available. Build and install the C++ bindings."
@@ -55,11 +56,11 @@ class ActFeatureExtractor:
                     self.cfg.fs = float(h.fs)
                     self.cfg.length = int(h.length)
 
-        self._engine = ActEngine(
+        # ActMLXEngine signature: (fs, length, ranges=None, force_regenerate=False, mute=True, dict_cache_file="...")
+        self._engine = ActMLXEngine(
             self.cfg.fs,
             int(self.cfg.length),
             self.cfg.ranges if self.cfg.ranges is not None else None,
-            self.cfg.complex_mode,
             self.cfg.force_regenerate,
             self.cfg.mute,
             self.cfg.dict_cache_file,

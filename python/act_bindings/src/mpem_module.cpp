@@ -11,7 +11,8 @@
  #include <algorithm>
  #include <memory>
  
- #include "ACT.h"
+ #include "ACT_CPU.h"
+ #include "ACT_MLX.h"
 
 namespace py = pybind11;
 
@@ -49,6 +50,40 @@ ACT::ParameterRanges make_ranges(double fs, int length) {
     r.c_step = 5.0; // [-10,-5,0,5,10]
 
     return r;
+}
+
+// Convert classic ACT ranges to CPU/MLX ranges
+static ACT_CPU::ParameterRanges to_cpu_ranges(const ACT::ParameterRanges& s) {
+    ACT_CPU::ParameterRanges d;
+    d.tc_min = s.tc_min; d.tc_max = s.tc_max; d.tc_step = s.tc_step;
+    d.fc_min = s.fc_min; d.fc_max = s.fc_max; d.fc_step = s.fc_step;
+    d.logDt_min = s.logDt_min; d.logDt_max = s.logDt_max; d.logDt_step = s.logDt_step;
+    d.c_min = s.c_min; d.c_max = s.c_max; d.c_step = s.c_step;
+    return d;
+}
+static ACT_CPU_f::ParameterRanges to_mlx_ranges(const ACT::ParameterRanges& s) {
+    ACT_CPU_f::ParameterRanges d;
+    d.tc_min = s.tc_min; d.tc_max = s.tc_max; d.tc_step = s.tc_step;
+    d.fc_min = s.fc_min; d.fc_max = s.fc_max; d.fc_step = s.fc_step;
+    d.logDt_min = s.logDt_min; d.logDt_max = s.logDt_max; d.logDt_step = s.logDt_step;
+    d.c_min = s.c_min; d.c_max = s.c_max; d.c_step = s.c_step;
+    return d;
+}
+
+template <typename Scalar>
+static std::vector<double> to_std_vector(const act::VecX<Scalar>& v) {
+    std::vector<double> out(v.size());
+    for (int i = 0; i < v.size(); ++i) out[i] = static_cast<double>(v[i]);
+    return out;
+}
+template <typename Scalar>
+static std::vector<std::vector<double>> params_to_list(const act::ParamsMat<Scalar>& M) {
+    std::vector<std::vector<double>> out(M.rows());
+    for (int i = 0; i < M.rows(); ++i) {
+        out[i] = { static_cast<double>(M(i,0)), static_cast<double>(M(i,1)),
+                   static_cast<double>(M(i,2)), static_cast<double>(M(i,3)) };
+    }
+    return out;
 }
 
 // Parse optional Python dict 'ranges' into ACT::ParameterRanges; falls back to defaults
@@ -97,88 +132,58 @@ ACT::ParameterRanges parse_ranges(py::object ranges_obj, double fs, int length) 
     return r;
 }
 
-class ActEngine {
+class ActCPUEngine {
 public:
-    ActEngine(double fs, int length, py::object ranges = py::none(),
-              bool complex_mode = false, bool force_regenerate = false,
-              bool mute = true, std::string dict_cache_file = "dict_cache.bin")
+    ActCPUEngine(double fs, int length, py::object ranges = py::none(),
+                 bool force_regenerate = false, bool mute = true,
+                 std::string dict_cache_file = std::string("dict_cpu.bin"))
         : fs_(fs), length_(length) {
-        ACT::ParameterRanges r = parse_ranges(ranges, fs, length);
+        auto r_act = parse_ranges(ranges, fs, length);
+        auto r = to_cpu_ranges(r_act);
         const bool verbose = !mute;
-
-        // Try to load dictionary from cache if not forcing regeneration
         if (!force_regenerate && !dict_cache_file.empty()) {
-            auto loaded = ACT::load_dictionary<ACT>(dict_cache_file, verbose);
-            if (loaded) {
-                act_ = std::move(loaded);
-                // Sync interface state with loaded dictionary
-                fs_ = act_->get_FS();
-                length_ = act_->get_length();
-            }
+            auto loaded = ACT_CPU::load_dictionary<ACT_CPU>(dict_cache_file, verbose);
+            if (loaded) { act_ = std::move(loaded); fs_ = act_->get_FS(); length_ = act_->get_length(); }
         }
-
-        // If not loaded, create a new ACT, generate dictionary, and optionally save it
         if (!act_) {
-            act_ = std::make_unique<ACT>(fs, length, r, complex_mode, verbose);
+            act_ = std::make_unique<ACT_CPU>(fs, length, r, verbose);
             act_->generate_chirplet_dictionary();
-            if (!dict_cache_file.empty()) {
-                act_->save_dictionary(dict_cache_file);
-            }
+            if (!dict_cache_file.empty()) act_->save_dictionary(dict_cache_file);
         }
     }
 
     py::dict transform(py::array_t<double, py::array::c_style | py::array::forcecast> signal,
-                       int order = 1, bool debug = false) {
-        if (order <= 0) {
-            throw std::invalid_argument("order must be a positive integer");
-        }
+                       int order = 1) const {
+        if (order <= 0) throw std::invalid_argument("order must be a positive integer");
         py::buffer_info info = signal.request();
-        if (info.ndim != 1) {
-            throw std::invalid_argument("signal must be a 1D NumPy array");
-        }
+        if (info.ndim != 1) throw std::invalid_argument("signal must be a 1D NumPy array");
         const int n = static_cast<int>(info.shape[0]);
-        if (n != length_) {
-            throw std::invalid_argument("signal length must equal engine length");
-        }
+        if (n != length_) throw std::invalid_argument("signal length must equal engine length");
         const double* ptr = static_cast<const double*>(info.ptr);
         std::vector<double> sig_vec(ptr, ptr + n);
-        ACT::TransformResult tr = act_->transform(sig_vec, order);
-
-        // Build full result dictionary
+        auto tr = act_->transform(sig_vec, order);
         py::dict out;
-        out["params"]  = py::cast(tr.params);   // list[list[tc, fc, logDt, c]]
-        out["coeffs"]  = py::cast(tr.coeffs);   // list[float]
-        out["error"]   = py::float_(tr.error);  // float
-        out["signal"]  = py::cast(tr.signal);   // list[float]
-        out["approx"]  = py::cast(tr.approx);   // list[float]
-        out["residue"] = py::cast(tr.residue);  // list[float]
+        out["params"]  = py::cast(params_to_list(tr.params));
+        out["coeffs"]  = py::cast(to_std_vector(tr.coeffs));
+        out["signal"]  = py::cast(to_std_vector(tr.signal));
+        out["approx"]  = py::cast(to_std_vector(tr.approx));
+        out["residue"] = py::cast(to_std_vector(tr.residue));
+        out["error"]   = py::float_(tr.error);
         return out;
     }
 
     double fs() const { return fs_; }
     int length() const { return length_; }
-
     py::dict dict_info() const {
-        py::dict out;
-        out["fs"] = py::float_(fs_);
-        out["length"] = py::int_(length_);
+        py::dict out; out["fs"] = fs_; out["length"] = length_;
         if (act_) {
             const auto& pr = act_->get_param_ranges();
             py::dict ranges;
-            ranges["tc_min"] = pr.tc_min;
-            ranges["tc_max"] = pr.tc_max;
-            ranges["tc_step"] = pr.tc_step;
-            ranges["fc_min"] = pr.fc_min;
-            ranges["fc_max"] = pr.fc_max;
-            ranges["fc_step"] = pr.fc_step;
-            ranges["logDt_min"] = pr.logDt_min;
-            ranges["logDt_max"] = pr.logDt_max;
-            ranges["logDt_step"] = pr.logDt_step;
-            ranges["c_min"] = pr.c_min;
-            ranges["c_max"] = pr.c_max;
-            ranges["c_step"] = pr.c_step;
-            out["param_ranges"] = ranges;
-            out["dict_size"] = py::int_(act_->get_dict_size());
+            ranges["tc_min"] = pr.tc_min; ranges["tc_max"] = pr.tc_max; ranges["tc_step"] = pr.tc_step;
+            ranges["fc_min"] = pr.fc_min; ranges["fc_max"] = pr.fc_max; ranges["fc_step"] = pr.fc_step;
+            ranges["logDt_min"] = pr.logDt_min; ranges["logDt_max"] = pr.logDt_max; ranges["logDt_step"] = pr.logDt_step;
+            ranges["c_min"] = pr.c_min; ranges["c_max"] = pr.c_max; ranges["c_step"] = pr.c_step;
+            out["param_ranges"] = ranges; out["dict_size"] = act_->get_dict_size();
         }
         return out;
     }
@@ -186,14 +191,139 @@ public:
 private:
     double fs_;
     int length_;
-    std::unique_ptr<ACT> act_;
+    std::unique_ptr<ACT_CPU> act_;
+};
+
+class ActMLXEngine {
+public:
+    ActMLXEngine(double fs, int length, py::object ranges = py::none(),
+                 bool force_regenerate = false, bool mute = true,
+                 std::string dict_cache_file = std::string("dict_mlx.bin"))
+        : fs_(fs), length_(length) {
+        auto r_act = parse_ranges(ranges, fs, length);
+        auto r = to_mlx_ranges(r_act);
+        const bool verbose = !mute;
+        if (!force_regenerate && !dict_cache_file.empty()) {
+            auto loaded = ACT_CPU_f::load_dictionary<ACT_MLX_f>(dict_cache_file, verbose);
+            if (loaded) { act_ = std::move(loaded); fs_ = act_->get_FS(); length_ = act_->get_length(); }
+        }
+        if (!act_) {
+            act_ = std::make_unique<ACT_MLX_f>(fs, length, r, verbose);
+            act_->generate_chirplet_dictionary();
+            if (!dict_cache_file.empty()) act_->save_dictionary(dict_cache_file);
+        }
+    }
+
+    py::dict transform(py::array signal, int order = 1) const {
+        if (order <= 0) throw std::invalid_argument("order must be a positive integer");
+        py::buffer_info info = signal.request();
+        if (info.ndim != 1) throw std::invalid_argument("signal must be a 1D NumPy array");
+        const int n = static_cast<int>(info.shape[0]);
+        if (n != length_) throw std::invalid_argument("signal length must equal engine length");
+        std::vector<float> sigf(n);
+        if (info.format == py::format_descriptor<float>::format()) {
+            const float* ptr = static_cast<const float*>(info.ptr);
+            sigf.assign(ptr, ptr + n);
+        } else if (info.format == py::format_descriptor<double>::format()) {
+            const double* ptr = static_cast<const double*>(info.ptr);
+            for (int i = 0; i < n; ++i) sigf[i] = static_cast<float>(ptr[i]);
+        } else {
+            throw std::invalid_argument("signal must be float32 or float64");
+        }
+        auto tr = act_->transform(sigf, order);
+        py::dict out;
+        out["params"]  = py::cast(params_to_list(tr.params));
+        out["coeffs"]  = py::cast(to_std_vector(tr.coeffs));
+        out["signal"]  = py::cast(to_std_vector(tr.signal));
+        out["approx"]  = py::cast(to_std_vector(tr.approx));
+        out["residue"] = py::cast(to_std_vector(tr.residue));
+        out["error"]   = py::float_(tr.error);
+        return out;
+    }
+
+    double fs() const { return fs_; }
+    int length() const { return length_; }
+    py::dict dict_info() const {
+        py::dict out; out["fs"] = fs_; out["length"] = length_;
+        if (act_) {
+            const auto& pr = act_->get_param_ranges();
+            py::dict ranges;
+            ranges["tc_min"] = pr.tc_min; ranges["tc_max"] = pr.tc_max; ranges["tc_step"] = pr.tc_step;
+            ranges["fc_min"] = pr.fc_min; ranges["fc_max"] = pr.fc_max; ranges["fc_step"] = pr.fc_step;
+            ranges["logDt_min"] = pr.logDt_min; ranges["logDt_max"] = pr.logDt_max; ranges["logDt_step"] = pr.logDt_step;
+            ranges["c_min"] = pr.c_min; ranges["c_max"] = pr.c_max; ranges["c_step"] = pr.c_step;
+            out["param_ranges"] = ranges; out["dict_size"] = act_->get_dict_size();
+        }
+        return out;
+    }
+
+private:
+    double fs_;
+    int length_;
+    std::unique_ptr<ACT_MLX_f> act_;
 };
 
 
 } // namespace
 
 PYBIND11_MODULE(mpbfgs, m) {
-    m.doc() = "Pybind11 bindings for ACT MP-BFGS extraction";
+    m.doc() = "PyACT bindings for ACT_CPU (double) and ACT_MLX (float32) engines.";
+
+    py::class_<ActCPUEngine>(m, "ActCPUEngine")
+        .def(py::init<double, int, py::object, bool, bool, std::string>(),
+             py::arg("fs"),
+             py::arg("length"),
+             py::arg("ranges") = py::none(),
+             py::arg("force_regenerate") = false,
+             py::arg("mute") = true,
+             py::arg("dict_cache_file") = std::string("dict_cpu.bin"))
+        .def("transform", &ActCPUEngine::transform,
+             py::arg("signal"),
+             py::arg("order") = 1,
+             py::call_guard<py::scoped_ostream_redirect, py::scoped_estream_redirect>())
+        .def_property_readonly("fs", &ActCPUEngine::fs)
+        .def_property_readonly("length", &ActCPUEngine::length)
+        .def("dict_info", &ActCPUEngine::dict_info);
+
+    py::class_<ActMLXEngine>(m, "ActMLXEngine")
+        .def(py::init<double, int, py::object, bool, bool, std::string>(),
+             py::arg("fs"),
+             py::arg("length"),
+             py::arg("ranges") = py::none(),
+             py::arg("force_regenerate") = false,
+             py::arg("mute") = true,
+             py::arg("dict_cache_file") = std::string("dict_mlx.bin"))
+        .def("transform", &ActMLXEngine::transform,
+             py::arg("signal"),
+             py::arg("order") = 1,
+             py::call_guard<py::scoped_ostream_redirect, py::scoped_estream_redirect>())
+        .def_property_readonly("fs", &ActMLXEngine::fs)
+        .def_property_readonly("length", &ActMLXEngine::length)
+        .def("dict_info", &ActMLXEngine::dict_info);
+
+    // Backward-compatible wrapper: ActEngine -> defaults to CPU backend
+    class ActEngine {
+    public:
+        ActEngine(double fs, int length, py::object ranges = py::none(),
+                  bool /*complex_mode*/ = false,
+                  bool force_regenerate = false,
+                  bool mute = true,
+                  std::string dict_cache_file = std::string("dict_cache.bin"))
+            : cpu_(fs, length, ranges, force_regenerate, mute, dict_cache_file) {}
+
+        py::dict transform(py::array_t<double, py::array::c_style | py::array::forcecast> signal,
+                           int order = 1, bool /*debug*/ = false) const {
+            return cpu_.transform(signal, order);
+        }
+
+        double fs() const { return cpu_.fs(); }
+        int length() const { return cpu_.length(); }
+        py::dict dict_info() const { return cpu_.dict_info(); }
+
+    private:
+        ActCPUEngine cpu_;
+    };
+
     py::class_<ActEngine>(m, "ActEngine")
         .def(py::init<double, int, py::object, bool, bool, bool, std::string>(),
              py::arg("fs"),
@@ -207,10 +337,8 @@ PYBIND11_MODULE(mpbfgs, m) {
              py::arg("signal"),
              py::arg("order") = 1,
              py::arg("debug") = false,
-             "Run ACT transform and return top-1 chirplet parameters.",
              py::call_guard<py::scoped_ostream_redirect, py::scoped_estream_redirect>())
         .def_property_readonly("fs", &ActEngine::fs)
         .def_property_readonly("length", &ActEngine::length)
-        .def("dict_info", &ActEngine::dict_info,
-             "Return dictionary metadata: fs, length, param_ranges, dict_size");
+        .def("dict_info", &ActEngine::dict_info);
 }

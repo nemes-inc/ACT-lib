@@ -38,7 +38,6 @@ htmlcov/
 
 # Logs and runs
 logs/
-*.log
 runs/
 wandb/
 mlruns/

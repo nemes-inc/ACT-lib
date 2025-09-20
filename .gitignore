@@ -93,12 +93,10 @@ Thumbs.db
 Makefile_old
 
 # Log files
-*.log
 debug.log
 error.log
 
 # Core dumps
-core
 core.*
 
 # Profiling output
