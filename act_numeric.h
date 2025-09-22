@@ -49,6 +49,14 @@ inline void gemv_colmajor_trans(int m, int n,
     cblas_dgemv(CblasColMajor, CblasTrans, m, n, alpha, A, lda, x, incx, beta, y, incy);
 }
 
+// iamax: index of the element with maximum absolute value
+inline int iamax(int n, const float* x, int incx) {
+    return static_cast<int>(cblas_isamax(n, x, incx));
+}
+inline int iamax(int n, const double* x, int incx) {
+    return static_cast<int>(cblas_idamax(n, x, incx));
+}
+
 } // namespace blas
 } // namespace act
 

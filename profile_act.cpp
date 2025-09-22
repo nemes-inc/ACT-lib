@@ -238,6 +238,39 @@ int main() {
     for (int i = 0; i < NUM_SIGNALS; ++i) {
         std::cout << "\nAnalyzing Signal " << (i+1) << "/" << NUM_SIGNALS << ":" << std::endl;
         
+        // Perform one search to warm up the dictionary in memory
+        if (act_legacy) act_legacy->search_dictionary(test_signals[i]);
+        else if (act_mlx || act_mlx_f) {
+            if (use_float) {
+                const auto& s = test_signals[i];
+                std::vector<float> sf(s.size());
+                for (size_t j=0;j<s.size();++j) sf[j] = static_cast<float>(s[j]);
+                act_mlx_f->search_dictionary(sf);
+            } else {
+                act_mlx->search_dictionary(test_signals[i]);
+            }
+        }
+        else if (act_accel || act_accel_f) {
+            if (use_float) {
+                const auto& s = test_signals[i];
+                std::vector<float> sf(s.size());
+                for (size_t j=0;j<s.size();++j) sf[j] = static_cast<float>(s[j]);
+                act_accel_f->search_dictionary(sf);
+            } else {
+                act_accel->search_dictionary(test_signals[i]);
+            }
+        }
+        else if (act_cpu || act_cpu_f) {
+            if (use_float) {
+                const auto& s = test_signals[i];
+                std::vector<float> sf(s.size());
+                for (size_t j=0;j<s.size();++j) sf[j] = static_cast<float>(s[j]);
+                act_cpu_f->search_dictionary(sf);
+            } else {
+                act_cpu->search_dictionary(test_signals[i]);
+            }
+        }
+        
         // Dictionary search timing
         timer.start();
         std::pair<int,double> search_result;

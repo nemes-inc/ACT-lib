@@ -188,13 +188,9 @@ std::pair<int,Scalar> ACT_CPU_T<Scalar>::search_dictionary(const Eigen::Ref<cons
                                    signal.data(), 1,
                                    beta, scores.data(), 1);
 
-    // Find argmax
-    int best_idx = 0;
-    Scalar best_val = -std::numeric_limits<Scalar>::infinity();
-    for (int i = 0; i < n; ++i) {
-        Scalar v = scores[i];
-        if (v > best_val) { best_val = v; best_idx = i; }
-    }
+    // Find argmax by magnitude using BLAS IAMAX (max |value|)
+    int best_idx = act::blas::iamax(n, scores.data(), 1);
+    Scalar best_val = scores[best_idx]; // keep signed value for potential diagnostics
     return {best_idx, best_val};
 }
 

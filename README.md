@@ -1,41 +1,18 @@
 # C++ Adaptive Chirplet Transform (ACT) - C++ Implementation
 
-A high-performance, general-purpose C++ implementation of the Adaptive Chirplet Transform for time-frequency analysis of non‑stationary signals. Suitable for audio, radar/sonar, biomedical (including EEG), and other domains. 
-
-## Current Project Status
-
-This section summarizes the current state of the repository as it is now.
-
-- **Core algorithm**: The baseline implementation performs dictionary-based matching pursuit with unit-energy chirplet generation and BFGS refinement. `search_dictionary` is virtual, enabling backend overrides.
-- **CPU backends**: `ACT_CPU` (Eigen + BLAS baseline) and `ACT_Accelerate` (Apple Accelerate-optimized) provide fast CPU execution. BLAS is used on Linux; Accelerate on macOS.
-- **MLX backend (GPU, float32)**: `ACT_MLX` enables a GPU-accelerated coarse search using Apple MLX when compiled with `USE_MLX=ON`. It pre-packs the dictionary to device and runs `scores = transpose(dict) @ x` and `argmax` on device. Double precision falls back to the CPU path.
-- **Python bindings**: `python/act_bindings` exposes `pyact.mpbfgs` with `ActCPUEngine`, `ActMLXEngine`, and a backward-compatible `ActEngine` (CPU by default). `transform(...)` returns a rich dict. Tests are included.
-- **MLX build integration**: `scripts/setup_mlx.sh` installs the vendored MLX into `third_party/mlx/install/`. CMake options `USE_MLX`, `MLX_INCLUDE`, `MLX_LIB`, and `MLX_LINK` configure the Python build. `scripts/build_pyact_mlx.sh` builds the wheel with MLX enabled.
-- **EEG utilities**: `python/act_mlp` provides feature extraction based on ACT (defaults to `ActMLXEngine`) and a simple MLP training pipeline.
-- **Profiling**: `profile_act.cpp` measures end-to-end timings (dictionary, search, transform, SNR).
-- **CLI analyzer**: `eeg_act_analyzer` supports interactive exploration of CSV EEG data and ACT parameters.
-
-__What’s next__
-- **Batched multi-signal coarse search**: `A^T @ X` for batches of 4–16 signals (CPU via GEMM, MLX via `matmul`).
-- **Top‑k per signal**: Efficient selection for batched scores.
-- **Batched transform**: Optional refinement (BFGS) per signal with a small thread pool.
-
-__How to try the faster search today__
-- Use `ACT_Accelerate` (CPU) or `ACT_MLX` (float32 MLX when enabled):
-  - Instantiate `ACT_Accelerate` or `ACT_MLX`, call `generate_chirplet_dictionary()`, then run `search_dictionary(...)` or `transform(...)`.
-  - `ACT_MLX` offloads the coarse search to MLX (GPU) when the project is built with `USE_MLX=ON`; otherwise it transparently falls back to the CPU path.
+A high-performance, general-purpose C++ implementation of the Adaptive Chirplet Transform for time-frequency analysis of non‑stationary signals. Suitable for audio, radar/sonar, biomedical, and other domains. 
 
 ## Overview
 
 The Adaptive Chirplet Transform (ACT) is a powerful signal processing technique that decomposes signals into chirplets - Gaussian-enveloped sinusoids with time-varying frequency. This implementation provides:
 
-- **High Performance**: BLAS/Accelerate-optimized dictionary search; optional MLX GPU coarse search (float32)
-- **Flexible Analysis**: Configurable parameter ranges for different signal types
-- **Example Applications**: EEG-oriented examples to demonstrate usage
-- **Professional Quality**: Production-ready code with comprehensive testing
+- **High Performance**: Multi-platform CPU-only and GPU-accelerated code targeting Apple Metal and Intel x86/CUDA using the Apple MLX library.
+- **Flexible Analysis**: Configurable parameter ranges for different types of analysis.
+- **Example Tests and Applications**: Python bindings and example applications focused on EEG analysis.
+
 
 ### Algorithm Summary (Dictionary Search + Optimization)
-This implementation uses a two-stage, greedy matching pursuit approach:
+This implementation uses a two-stage, greedy matching pursuit approach explored in the referenced papers:
 
 1) Coarse dictionary search
    - Build a discrete grid of chirplet parameters (tc, fc, logDt, c).
@@ -49,20 +26,85 @@ This implementation uses a two-stage, greedy matching pursuit approach:
 3) Greedy update and iterate
    - Subtract the reconstructed chirplet from the residual and repeat steps (1–2) up to the chosen transform order K.
 
-Performance notes: The heavy step is the dictionary search. On CPU it is accelerated by BLAS/Accelerate; when built with `USE_MLX=ON`, the float32 MLX backend offloads the coarse search to the GPU. Unit-energy normalization removes duration bias and stabilizes coefficient estimation.
+## Architecture
 
-## Features
+- **Core algorithm**: The baseline implementation performs dictionary-based matching pursuit with unit-energy chirplet generation and BFGS refinement. `search_dictionary` is virtual, enabling backend overrides.
+- **CPU backends**: `ACT_CPU` (Eigen + BLAS baseline) and `ACT_Accelerate` (Apple Accelerate-optimized) provide fast CPU execution. BLAS is used on Linux; Accelerate on macOS.
+- **MLX backend (GPU, float32)**: `ACT_MLX` enables a GPU-accelerated coarse search using Apple MLX when compiled with `USE_MLX=ON`. It pre-packs the dictionary to device and runs `scores = transpose(dict) @ x` and `argmax` on device. Double precision falls back to the CPU path.
+MLX can be compiled to run on Apple Metal or CUDA.
+- **Python bindings**: `python/act_bindings` exposes `pyact.mpbfgs` with `ActCPUEngine`, `ActMLXEngine`, and a backward-compatible `ActEngine` (CPU by default). `transform(...)` returns a rich dict. Tests are included.
+- **MLX build integration**: `scripts/setup_mlx.sh` installs the vendored MLX into `third_party/mlx/install/`. CMake options `USE_MLX`, `MLX_INCLUDE`, `MLX_LIB`, and `MLX_LINK` configure the Python build. `scripts/build_pyact_mlx.sh` builds the wheel with MLX enabled.
+- **EEG ML utilities**: `python/act_mlp` provides feature extraction based on ACT (defaults to `ActMLXEngine`) and a simple MLP training pipeline.
+- **Profiling**: `profile_act.cpp` measures end-to-end timings using a sample dictionary (dictionary, search, transform, SNR).
+- **CLI analyzer**: `eeg_act_analyzer` supports interactive exploration of CSV EEG data and ACT parameters.
 
-### Core Capabilities
-- **Adaptive chirplet decomposition** with BFGS refinement (unit-energy atoms)
-- **CPU acceleration** using Apple Accelerate (macOS) or BLAS (Linux)
-- **Optional MLX acceleration (float32)** for coarse search when built with `USE_MLX=ON`
-- **Python bindings** (`pyact.mpbfgs`) with `ActCPUEngine`, `ActMLXEngine`, and `ActEngine` (CPU compatibility wrapper)
-- **Configurable dictionary parameters** and on-disk dictionary caching (ACTDICT v2)
-- **EEG feature extraction & MLP** utilities in `python/act_mlp`
-- **Tests & profiling**: C++ and Python tests, plus a profiling target
+__What’s next__
+- **Batched multi-signal coarse search**: `A^T @ X` for batches of 4–16 signals (CPU via GEMM, MLX via `matmul`).
+- **Top‑k per signal**: Efficient selection for batched scores.
+- **Batched transform**: Optional refinement (BFGS) per signal with a small thread pool.
+
+__How to try the faster search today__
+- Use `ACT_Accelerate` (CPU) or `ACT_MLX` (float32 MLX when enabled):
+  - Instantiate `ACT_Accelerate` or `ACT_MLX`, call `generate_chirplet_dictionary()`, then run `search_dictionary(...)` or `transform(...)`.
+  - `ACT_MLX` offloads the coarse search to MLX (GPU) when the project is built with `USE_MLX=ON`.
+
+
+## Basic Usage
+
+In the following example, we show how to use the ACT_MLX class to perform a chirplet transform on a signal.
+
+
+```cpp
+        double fs = 128.0; // Signal Sampling frequency
+        int length = 128; // Analysis window length
+
+        //Dictionary ranges
+        ACT::ParameterRanges ranges(
+            0, length, 16,    // tc: time center (16 values)
+            2.0, 12.0, 2.0,   // fc: frequency center (2 values)
+            -3.0, -1.0, 1.0,  // logDt: duration range (16 values)
+            -10.0, 10.0, 10.0 // c: chirp rate (21 values)
+        );
+
+        // Initialize ACT_MLX
+        ACT_MLX act(fs, length, ranges, true);
+
+        // Generate dictionary in memory
+        int dict_size = act.generate_chirplet_dictionary();
+        std::cout << "Dictionary generated: " << dict_size << " atoms\n";
+
+        // Transform signal
+        // Signal is a vector<double|float> of length `length`
+        // Transform order is the number of chirplets to find (i.e. how many iteration on the residual signal to perform)
+        int transform_order = 2;
+        ACT::TransformResult res = act.transform(signal, transform_order);
+
+        std::cout << "Chirplets found: " << res.params.rows() << "\n";
+        for (int i = 0; i < res.params.rows(); ++i) {
+            std::cout << "  #" << (i+1) << ": tc=" << res.params(i,0)
+                      << ", fc=" << res.params(i,1)
+                      << ", logDt=" << res.params(i,2)
+                      << ", c=" << res.params(i,3)
+                      << ", coeff=" << res.coeffs[i] << "\n";
+        }
+```
+
+The result is a TransformResult object containing the chirplets found, the residual signal, the error, and the signal reconstructed from the chirplets.
 
 ## Quick Start
+
+### Installation (as of 2025-09-21)
+Full installation instructions are WIP. 
+On MacOSX Xcode and CMake are required.
+On Linux for CUDA the typical CUDA setup is required, MLX required NVidia NCCL to build
+
+These are the packages I had to install on Ubuntu 24.04 on top of the usual CUDA setup for PyTorch (Drivers, etc.)
+```bash
+sudo apt-get install libblas-dev liblapack-dev liblapacke-dev 
+sudo apt-get install libnccl2 libnccl-dev
+```
+
+Cuda Makefile is in the "cuda" branch, will merge soon.
 
 ### Prerequisites
 - C++17 compatible compiler
@@ -102,14 +144,12 @@ cpu = ActCPUEngine(fs, length, ranges, True, True, "")
 # MLX backend (float32); falls back to CPU if MLX not compiled in
 mlx = ActMLXEngine(fs, length, ranges, True, True, "")
 
+#random signal for testing
 x = np.random.randn(length)
 out = mlx.transform(x, order=3)
 print("Error:", float(out["error"]))
 print("First component params:", out["params"][0])
 
-# Backward-compatible wrapper (CPU default)
-from pyact.mpbfgs import ActEngine
-cpu_compat = ActEngine(fs, length, ranges, False, True, True, "")
 ```
 
 ### Python bindings (CPU-only default)
@@ -282,17 +322,6 @@ Additional notes:
 - The same unit-energy normalization is implemented in the SIMD code paths (`ACT_SIMD.cpp`) using Apple Accelerate (vDSP) on macOS and NEON helpers on ARM for efficiency.
 - These changes were validated by strict synthetic tests (noiseless and 0 dB noisy), demonstrating accurate parameter recovery and SNR improvement, and eliminating the previous `logDt` upper-bound bias.
 
-### Dictionary Design
-The dictionary contains pre-computed chirplet templates for all parameter combinations:
-```
-Dictionary Size = tc_steps × fc_steps × logDt_steps × c_steps
-```
-
-Optimal parameter resolution balances:
-- **Temporal Resolution**: Finer steps detect more precise timing
-- **Frequency Resolution**: Better frequency discrimination
-- **Memory Usage**: Larger dictionaries require more RAM
-- **Computation Time**: More templates increase search time
 
 ## Usage Examples
 
@@ -324,31 +353,15 @@ act.generate_chirplet_dictionary();
 auto result = act.transform(eeg_signal, 10);
 ```
 
-Initial findings on performance using the included dataset:
-
-1. **Dictionary Resolution Impact**: Coarse temporal resolution (0.25s steps) caused artificial clustering of chirplets at signal boundaries
-2. **Duration Diversity**: Limited logDt values severely constrained duration diversity, leading to uniform chirplet durations
-3. **Optimization Benefits**: Two-stage process (dictionary + BFGS) enables detection of precise frequencies (e.g., 28.3 Hz) between discrete dictionary steps
-4. **Memory vs. Resolution Trade-off**: Balanced parameter ranges achieve good temporal diversity while maintaining feasible memory usage
 
 ## Dependencies
-
-### ALGLIB
-This project includes ALGLIB for numerical optimization:
-- **Location**: `alglib/` directory
-- **Usage**: BFGS optimization of chirplet parameters
-- **License**: GPL/Commercial (see alglib/license.txt)
-- **Version**: 3.x (included)
-
-### Platform Libraries
-- **macOS**: Accelerate framework (automatic)
-- **Linux**: BLAS/LAPACK (`libblas-dev liblapack-dev`)
-- **Optional MLX (macOS)**: Apple MLX (Metal-based). Built via `scripts/setup_mlx.sh` into `third_party/mlx/install/`.
-  - This repository vendors MLX as a git submodule at `third_party/mlx/`. Initialize it with:
-    ```bash
-    git submodule update --init --recursive
-    ```
-  - If the submodule is missing, `scripts/setup_mlx.sh` will print an error and suggest this command.
+ - Eigen to guarantee contiguous memory layout for vectors and matrix operations
+ - AlgLib for BFGS optimization
+ - BLAS/LAPACK for CPU backends
+ - Apple Accelerate for macOS
+ - Apple MLX for GPU acceleration (float32)
+ - linenoise for example EEG analyzer
+ - CMake for building
 
 ### Python (bindings and tools)
 - `numpy`, `pybind11`, `scikit-build-core`
@@ -402,13 +415,6 @@ Based on the seminal paper:
 - Batched multi‑signal coarse search on CPU (single GEMM: `A^T @ X`) and MLX (`matmul(transpose(dict), X)`).
 - Top‑k selection per signal and optional batched refinement.
 - Additional benchmarks and CI for MLX-enabled wheels.
-
-### ALGLIB Integration
-The implementation includes the complete ALGLIB source tree for:
-- Bounded nonlinear optimization (`minbc` family)
-- Numerical gradient computation
-- OptGuard gradient verification (optional)
-- Robust error handling and convergence checking
 
 ## License
 
