@@ -125,6 +125,25 @@ make all
 make test
 ```
 
+#### C++ build with MLX enabled (macOS)
+```bash
+# 0) Initialize and build the vendored MLX once
+git submodule update --init --recursive
+bash scripts/setup_mlx.sh
+
+# 1) Build all C++ targets with MLX enabled on MacOSX
+make USE_MLX=1 \
+     MLX_INCLUDE="$(pwd)/third_party/mlx/install/include" \
+     MLX_LIB="$(pwd)/third_party/mlx/install/lib" \
+     MLX_LINK="-lmlx" \
+     all
+```
+
+Notes:
+- On macOS the Makefile links Apple Accelerate and Metal frameworks automatically.
+- The MLX GPU coarse search path currently runs in float32; double precision falls back to the CPU path.
+- Linux/CUDA MLX linkage is under active development (see CUDA branch). If building on Linux, adjust link flags accordingly.
+
 ### Python usage (pyact.mpbfgs)
 ```python
 import numpy as np
