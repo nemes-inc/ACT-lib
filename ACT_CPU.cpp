@@ -50,6 +50,12 @@ ACT_CPU_T<Scalar>::ACT_CPU_T(double FS, int length, const ParameterRanges& range
 }
 
 template <typename Scalar>
+Eigen::Vector4d ACT_CPU_T<Scalar>::refine_params_bfgs(const Eigen::Vector4d& initial_params,
+                                       const Eigen::Ref<const act::VecX<Scalar>>& signal) const {
+    Eigen::VectorXd tmp = bfgs_optimize(initial_params, signal);
+    return tmp.head<4>();
+}
+template <typename Scalar>
 ACT_CPU_T<Scalar>::~ACT_CPU_T() {
 }
 

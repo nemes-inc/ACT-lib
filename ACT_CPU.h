@@ -91,6 +91,11 @@ public:
     double minimize_this(const std::vector<double>& params,
                          const Eigen::Ref<const act::VecX<Scalar>>& signal) const;
 
+    // Public wrapper to refine parameters via BFGS starting from a coarse init.
+    // Returns refined (tc, fc, logDt, c) in double precision.
+    Eigen::Vector4d refine_params_bfgs(const Eigen::Vector4d& initial_params,
+                                       const Eigen::Ref<const act::VecX<Scalar>>& signal) const;
+
     // Save/Load dictionary (ACTDICT v2 compatible)
     bool save_dictionary(const std::string& file_path) const;
 

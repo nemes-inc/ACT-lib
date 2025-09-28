@@ -11,8 +11,8 @@
 # Compiler Configuration
 CXX = g++
 CC = gcc
-CXXFLAGS = -std=c++17 -O3 -Wall -Wextra -Wuninitialized -g -MMD -MP -I. -Ialglib/alglib-cpp/src -Ilinenoise
-CFLAGS = -O3 -Wall -Wextra -g -MMD -MP -I. -Ialglib/alglib-cpp/src -Ilinenoise
+CXXFLAGS = -std=c++17 -O3 -Wall -Wextra -Wuninitialized -g -MMD -MP -I. -Ialglib/alglib-cpp/src -Ilinenoise -Ithird_party/spdlog/include -Ithird_party/oscpp/include
+CFLAGS = -O3 -Wall -Wextra -g -MMD -MP -I. -Ialglib/alglib-cpp/src -Ilinenoise -Ithird_party/spdlog/include -Ithird_party/oscpp/include
 LDFLAGS = -lm -pthread
 
 # Platform-specific optimizations
@@ -45,6 +45,7 @@ TEST_ACT_CPU_F_SOURCES = test_act_cpu_f.cpp
 TEST_ACT_ACCEL_SOURCES = test_act_accel.cpp
 TEST_ACT_CPU_MT_SOURCES = test_act_cpu_mt.cpp
 PROFILE_ACT_SOURCES = profile_act.cpp
+PROFILE_ACT_MT_SOURCES = profile_act_mt.cpp
 
 # Linenoise library
 LINENOISE_SOURCES = linenoise/linenoise.c
@@ -100,11 +101,12 @@ TEST_ACT_CPU_MT_TARGET = $(BINDIR)/test_act_cpu_mt
 PROFILE_ACT_TARGET = $(BINDIR)/profile_act
 TEST_ACT_SYNTHETIC_TARGET = $(BINDIR)/test_act_synthetic
 TEST_ACT_MLX_TARGET = $(BINDIR)/test_act_mlx
+PROFILE_ACT_MT_TARGET = $(BINDIR)/profile_act_mt
 EEG_ACT_ANALYZER_TARGET = $(BINDIR)/eeg_act_analyzer
 TEST_DICT_IO_TARGET = $(BINDIR)/test_dict_io
 
 # Default target
-all: $(TEST_ACT_TARGET) $(TEST_ACT_CPU_TARGET) $(TEST_ACT_CPU_F_TARGET) $(TEST_ACT_ACCEL_TARGET) $(TEST_ACT_CPU_MT_TARGET) $(PROFILE_ACT_TARGET) $(TEST_ACT_SYNTHETIC_TARGET) $(EEG_ACT_ANALYZER_TARGET) $(TEST_DICT_IO_TARGET) $(TEST_ACT_MLX_TARGET)
+all: $(TEST_ACT_TARGET) $(TEST_ACT_CPU_TARGET) $(TEST_ACT_CPU_F_TARGET) $(TEST_ACT_ACCEL_TARGET) $(TEST_ACT_CPU_MT_TARGET) $(PROFILE_ACT_TARGET) $(PROFILE_ACT_MT_TARGET) $(TEST_ACT_SYNTHETIC_TARGET) $(EEG_ACT_ANALYZER_TARGET) $(TEST_DICT_IO_TARGET) $(TEST_ACT_MLX_TARGET)
 
 # Create directories
 $(OBJDIR):
@@ -159,6 +161,11 @@ $(PROFILE_ACT_TARGET): $(ACT_CORE_OBJECTS) $(OBJDIR)/profile_act.o $(ALGLIB_OBJE
 	@$(CXX) $^ -o $@ $(LDFLAGS)
 	@echo "✅ ACT profiling executable created: $@"
 
+$(PROFILE_ACT_MT_TARGET): $(ACT_CORE_OBJECTS) $(OBJDIR)/profile_act_mt.o $(ALGLIB_OBJECTS) | $(BINDIR)
+	@echo "Linking ACT MT profiling executable..."
+	@$(CXX) $^ -o $@ $(LDFLAGS)
+	@echo "✅ ACT MT profiling executable created: $@"
+
 # New: ACT_CPU multithreaded batch test
 $(TEST_ACT_CPU_MT_TARGET): $(ACT_CORE_OBJECTS) $(OBJDIR)/test_act_cpu_mt.o $(ALGLIB_OBJECTS) | $(BINDIR)
 	@echo "Linking ACT_CPU MT test executable..."
@@ -196,7 +203,7 @@ test_act_cpu_f: $(TEST_ACT_CPU_F_TARGET)
 test_act_cpu_mt: $(TEST_ACT_CPU_MT_TARGET)
 	@echo "Built $(TEST_ACT_CPU_MT_TARGET)"
 
-$(EEG_ACT_ANALYZER_TARGET): $(ACT_CORE_OBJECTS) $(OBJDIR)/eeg_act_analyzer.o $(ALGLIB_OBJECTS) $(LINENOISE_OBJECTS) | $(BINDIR)
+$(EEG_ACT_ANALYZER_TARGET): $(ACT_CORE_OBJECTS) $(OBJDIR)/eeg_act_analyzer.o $(OBJDIR)/muse_osc_receiver.o $(ALGLIB_OBJECTS) $(LINENOISE_OBJECTS) | $(BINDIR)
 	@echo "Linking EEG ACT analyzer executable..."
 	@$(CXX) $(CXXFLAGS) $^ -o $@ $(LDFLAGS)
 	@echo "✅ EEG ACT analyzer executable created: $@"
@@ -228,6 +235,10 @@ test-accel: $(TEST_ACT_ACCEL_TARGET)
 profile: $(PROFILE_ACT_TARGET)
 	@echo "📊 Running ACT performance profiling..."
 	@./$(PROFILE_ACT_TARGET)
+
+profile-mt: $(PROFILE_ACT_MT_TARGET)
+	@echo "📊 Running ACT MT performance profiling..."
+	@./$(PROFILE_ACT_MT_TARGET)
 
  
 

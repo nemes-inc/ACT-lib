@@ -52,6 +52,11 @@ public:
     // When loading a dictionary from disk, perform MLX packing/warmup too
     void on_dictionary_loaded() override;
 
+    // Expose device dictionary for batched GEMM paths (float32 only)
+#ifdef USE_MLX
+    const mx::array& get_dict_gpu() const;
+#endif
+
 private:
 #ifdef USE_MLX
     // Lazily packed row-major dictionary and device array (float32 only)

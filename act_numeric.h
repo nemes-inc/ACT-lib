@@ -49,6 +49,26 @@ inline void gemv_colmajor_trans(int m, int n,
     cblas_dgemv(CblasColMajor, CblasTrans, m, n, alpha, A, lda, x, incx, beta, y, incy);
 }
 
+// gemm (column-major): C := alpha * op(A) * op(B) + beta * C
+inline void gemm_colmajor(CBLAS_TRANSPOSE transA, CBLAS_TRANSPOSE transB,
+                          int M, int N, int K,
+                          float alpha,
+                          const float* A, int lda,
+                          const float* B, int ldb,
+                          float beta,
+                          float* C, int ldc) {
+    cblas_sgemm(CblasColMajor, transA, transB, M, N, K, alpha, A, lda, B, ldb, beta, C, ldc);
+}
+inline void gemm_colmajor(CBLAS_TRANSPOSE transA, CBLAS_TRANSPOSE transB,
+                          int M, int N, int K,
+                          double alpha,
+                          const double* A, int lda,
+                          const double* B, int ldb,
+                          double beta,
+                          double* C, int ldc) {
+    cblas_dgemm(CblasColMajor, transA, transB, M, N, K, alpha, A, lda, B, ldb, beta, C, ldc);
+}
+
 // iamax: index of the element with maximum absolute value
 inline int iamax(int n, const float* x, int incx) {
     return static_cast<int>(cblas_isamax(n, x, incx));

@@ -9,6 +9,19 @@
 #include <Accelerate/Accelerate.h>
 #endif
 
+#ifdef USE_MLX
+// Public accessor for device dictionary (float32 only)
+template <typename Scalar>
+const mx::array& ACT_MLX_T<Scalar>::get_dict_gpu() const {
+    // Only meaningful for float specialization
+    if constexpr (!std::is_same_v<Scalar, float>) {
+        throw std::runtime_error("ACT_MLX_T<Scalar>::get_dict_gpu is only available for float specialization");
+    }
+    ensure_mlx_dict();
+    return *dict_gpu_;
+}
+#endif
+
 template <typename Scalar>
 ACT_MLX_T<Scalar>::ACT_MLX_T(double FS,
                  int length,
@@ -70,6 +83,7 @@ std::pair<int, Scalar> ACT_MLX_T<Scalar>::search_dictionary(const Eigen::Ref<con
         return {best_idx, static_cast<Scalar>(best_val_f)};
     }
 #endif
+
     // Fallback: CPU (Accelerate) path
     return Base::search_dictionary(signal);
 }

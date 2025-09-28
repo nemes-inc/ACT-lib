@@ -78,6 +78,20 @@ int main() {
         }
         std::cout << "ACT_CPU MT test (coarse-only) passed.\n";
 
+        // 1b) GEMM batched coarse-only should closely match serial coarse-only
+        auto gemm_batch = actmt::transform_batch_gemm_coarse_only(act_cpu, signals, opts);
+        for (int i = 0; i < batch; ++i) {
+            if (!is_close_vec(serial[i].approx, gemm_batch[i].approx, 1e-8)) {
+                std::cerr << "GEMM batch mismatch in approx for item " << i << std::endl;
+                return 1;
+            }
+            if (!is_close_vec(serial[i].residue, gemm_batch[i].residue, 1e-8)) {
+                std::cerr << "GEMM batch mismatch in residue for item " << i << std::endl;
+                return 1;
+            }
+        }
+        std::cout << "ACT_CPU GEMM batch test (coarse-only) passed.\n";
+
         // 2) ACT_Accelerate path (falls back to ACT_CPU if not on Apple)
         ACT_Accelerate act_acc(fs, length, ranges, false);
         act_acc.generate_chirplet_dictionary();
@@ -102,6 +116,18 @@ int main() {
             }
         }
         std::cout << "ACT_Accelerate MT test (coarse-only) passed.\n";
+
+        // 3) Smoke test: refine=true path in parallel (uses per-signal transform)
+        ACT_CPU::TransformOptions opts_ref = opts; opts_ref.refine = true;
+        auto refined_parallel = actmt::transform_batch_parallel(act_cpu, signals, opts_ref, 0);
+        // Just verify that it runs and produces expected sizes
+        for (int i = 0; i < batch; ++i) {
+            if (refined_parallel[i].params.rows() <= 0 || refined_parallel[i].params.cols() != 4) {
+                std::cerr << "Refine parallel produced invalid params for item " << i << std::endl;
+                return 1;
+            }
+        }
+        std::cout << "ACT_CPU MT test (refine=true smoke) passed.\n";
 
         return 0;
     } catch (const std::exception& e) {

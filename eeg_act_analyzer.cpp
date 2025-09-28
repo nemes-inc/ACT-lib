@@ -2,6 +2,10 @@
 #include "ACT_CPU.h"
 #include "ACT_Accelerate.h"
 #include "ACT_MLX.h"
+#include "ACT_MLX_MT.h"
+#include "muse_osc_receiver.h"
+#include "ring_buffer.h"
+#include "logging/ndjson_logger.h"
 #include <iostream>
 #include <fstream>
 #include <sstream>
@@ -14,6 +18,12 @@
 #include <cmath>
 #include "linenoise.h"
 #include <chrono>
+#include <atomic>
+#include <array>
+#include <mutex>
+#include <condition_variable>
+#include <thread>
+#include <ctime>
 
 // --- Global State ---
 static std::vector<std::vector<double>> csv_data;
@@ -32,6 +42,40 @@ static std::unique_ptr<ACT_Accelerate_f> act_accel_f; // Float32 path (MLX or Ac
 static bool coarse_only = false;                  // skip BFGS if true
 static double sampling_frequency = 256.0; // Default Muse sampling rate
 static std::string current_filename;
+
+// --- Live OSC/Streaming State ---
+static std::unique_ptr<MuseOSCReceiver> muse_rx;
+static std::ofstream live_csv;
+static std::mutex live_csv_mu;
+static std::atomic<bool> live_running{false};
+static int live_port = 0;
+static std::string live_csv_path;
+static std::string live_json_base;
+static int live_window = 0; // must equal dictionary length
+static int live_hop = 64;
+static int live_order = 10;
+static bool live_refine = true;
+static int live_feedback_top = 1;
+static bool live_quiet = true; // suppress live per-window console output by default
+static size_t live_feedback_interval_ms = 1000; // throttle live console feedback
+enum class LiveBackend { AUTO, MLX, CPU };
+static LiveBackend live_backend = LiveBackend::AUTO;
+
+// Ring buffers per channel
+static RingBuffer<float> rb_tp9, rb_af7, rb_af8, rb_tp10;
+static size_t rb_capacity = 0;
+
+// Quality indicators (sample-and-hold)
+static std::array<std::atomic<int>,4> hs_last = {1,1,1,1};
+static std::atomic<int> blink_pending{0};
+static std::atomic<int> jaw_pending{0};
+
+// Analysis thread
+static std::thread analysis_th;
+static std::atomic<int64_t> sample_counter{0};
+static int64_t last_processed = 0;
+static std::string live_session_id;
+static const char* kChannels[4] = {"TP9","AF7","AF8","TP10"};
 
 // --- Forward Declarations ---
 void handle_load_csv(const std::vector<std::string>& args);
@@ -60,6 +104,13 @@ void save_multiwindow_combined_to_json(
     int overlap,
     int num_chirps);
 
+// Live mode handlers
+void handle_muse_start(const std::vector<std::string>& args);
+void handle_muse_stop(const std::vector<std::string>& args);
+void handle_muse_status(const std::vector<std::string>& args);
+static std::string iso8601_now();
+static void live_analysis_loop();
+
 // --- Main Application Loop ---
 int main() {
     const char* history_file = ".eeg_analyzer_history.txt";
@@ -76,6 +127,332 @@ int main() {
             linenoiseHistoryAdd(line_c);
             linenoiseHistorySave(history_file);
         }
+
+#if 0
+// --- Live mode implementation ---
+
+static std::string iso8601_now() {
+    using namespace std::chrono;
+    auto now = system_clock::now();
+    std::time_t t = system_clock::to_time_t(now);
+    std::tm tm{};
+#if defined(_WIN32)
+    localtime_s(&tm, &t);
+#else
+    localtime_r(&t, &tm);
+#endif
+    char buf[32];
+    std::strftime(buf, sizeof(buf), "%Y-%m-%dT%H:%M:%S", &tm);
+    return std::string(buf);
+}
+
+static void live_analysis_loop() {
+    // Determine backend
+    bool use_mlx = false;
+    ACT_MLX_f* act_mlx = nullptr;
+    ACT_CPU* act_cpu_ptr = nullptr;
+    ACT_Accelerate* act_accel_ptr = nullptr;
+
+    if (live_backend == LiveBackend::MLX || (live_backend == LiveBackend::AUTO && backend_sel == BackendSel::MLX)) {
+        if (act_accel_f) {
+            act_mlx = dynamic_cast<ACT_MLX_f*>(act_accel_f.get());
+            if (act_mlx) use_mlx = true;
+        }
+    }
+    if (!use_mlx) {
+        if (act_cpu) act_cpu_ptr = act_cpu.get();
+        else if (act_accel) act_accel_ptr = act_accel.get();
+    }
+
+    ACT_CPU::TransformOptions opts; opts.order = live_order; opts.refine = live_refine; opts.residual_threshold = 1e-6;
+    using clock = std::chrono::steady_clock;
+    auto last_feedback_time = clock::now();
+
+    while (live_running.load()) {
+        int64_t sc = sample_counter.load();
+        if (sc - last_processed < live_hop) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+            continue;
+        }
+        // Need enough data buffered
+        if (rb_tp9.size() < (size_t)live_window || rb_af7.size() < (size_t)live_window || rb_af8.size() < (size_t)live_window || rb_tp10.size() < (size_t)live_window) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+            continue;
+        }
+
+        const int64_t window_start = sc - live_window;
+
+        // Gather windows
+        std::vector<float> v_tp9, v_af7, v_af8, v_tp10;
+        if (!rb_tp9.latestWindow(live_window, v_tp9)) continue;
+        if (!rb_af7.latestWindow(live_window, v_af7)) continue;
+        if (!rb_af8.latestWindow(live_window, v_af8)) continue;
+        if (!rb_tp10.latestWindow(live_window, v_tp10)) continue;
+
+        // Convert to Eigen::VectorXd (double)
+        std::vector<Eigen::VectorXd> xs;
+        xs.reserve(4);
+        auto copy_to_eig = [](const std::vector<float>& v){
+            Eigen::VectorXd x(v.size());
+            for (size_t i = 0; i < v.size(); ++i) x[(int)i] = (double)v[i];
+            return x;
+        };
+        xs.emplace_back(copy_to_eig(v_tp9));
+        xs.emplace_back(copy_to_eig(v_af7));
+        xs.emplace_back(copy_to_eig(v_af8));
+        xs.emplace_back(copy_to_eig(v_tp10));
+
+        // Run batched analysis
+        std::vector<ACT_CPU::TransformResult> results_cpu;
+        std::vector<ACT_CPU_f::TransformResult> results_mlx;
+        if (use_mlx && act_mlx) {
+            auto r = actmlx::transform_batch(*act_mlx, xs, opts);
+            results_mlx = std::move(r);
+        } else if (act_cpu_ptr) {
+            results_cpu = actmt::transform_batch(*act_cpu_ptr, xs, opts);
+        } else if (act_accel_ptr) {
+            results_cpu = actmt::transform_batch(*act_accel_ptr, xs, opts);
+        } else {
+            std::cout << "[live] No suitable backend available; stopping analysis." << std::endl;
+            live_running = false;
+            break;
+        }
+
+        // Emit NDJSON and CLI feedback
+        for (int ch = 0; ch < 4; ++ch) {
+            const char* cname = kChannels[ch];
+            int used_order = 0;
+            double err = 0.0;
+            std::vector<logging::ChirpletJson> chirps;
+            if (use_mlx) {
+                const auto& R = results_mlx[ch];
+                used_order = (int)R.params.rows();
+                err = (double)R.error;
+                chirps.reserve(used_order);
+                for (int i = 0; i < used_order; ++i) {
+                    double tc_local = (double)R.params(i,0);
+                    double tc_global = tc_local + (double)window_start;
+                    chirps.push_back({
+                        tc_global,
+                        tc_global / sampling_frequency,
+                        (double)R.params(i,1),
+                        1000.0 * std::exp((double)R.params(i,2)),
+                        (double)R.params(i,3),
+                        (double)R.coeffs[i]
+                    });
+                }
+            } else {
+                const auto& R = results_cpu[ch];
+                used_order = (int)R.params.rows();
+                err = R.error;
+                chirps.reserve(used_order);
+                for (int i = 0; i < used_order; ++i) {
+                    double tc_local = R.params(i,0);
+                    double tc_global = tc_local + (double)window_start;
+                    chirps.push_back({
+                        tc_global,
+                        tc_global / sampling_frequency,
+                        R.params(i,1),
+                        1000.0 * std::exp(R.params(i,2)),
+                        R.params(i,3),
+                        R.coeffs[i]
+                    });
+                }
+            }
+
+            // NDJSON line
+            logging::NDJSONLogger::log_window_result(cname, window_start, err, used_order, chirps, iso8601_now());
+        }
+
+        // Throttled/optional CLI feedback
+        if (!live_quiet) {
+            auto now = clock::now();
+            auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(now - last_feedback_time).count();
+            if (elapsed_ms >= static_cast<long long>(live_feedback_interval_ms)) {
+                auto print_top = [&](auto& R, const char* cname){
+                    int k = std::min(live_feedback_top, (int)R.params.rows());
+                    std::cout << cname << " found=" << R.params.rows() << "/" << live_order;
+                    for (int i = 0; i < k; ++i) {
+                        double tc_s = ((double)R.params(i,0) + (double)window_start) / sampling_frequency;
+                        double fc = (double)R.params(i,1);
+                        double dur_ms = 1000.0 * std::exp((double)R.params(i,2));
+                        double c = (double)R.params(i,3);
+                        double a = (double)R.coeffs[i];
+                        std::cout << " | tc=" << std::fixed << std::setprecision(3) << tc_s
+                                  << "s fc=" << std::setprecision(1) << fc
+                                  << "Hz dur=" << std::setprecision(0) << dur_ms
+                                  << "ms c=" << std::setprecision(1) << c
+                                  << "Hz/s a=" << std::setprecision(3) << a;
+                    }
+                };
+
+                std::cout << "[WIN start=" << window_start << "] ";
+                if (use_mlx) {
+                    print_top(results_mlx[0], "TP9"); std::cout << "  ";
+                    print_top(results_mlx[1], "AF7"); std::cout << "  ";
+                    print_top(results_mlx[2], "AF8"); std::cout << "  ";
+                    print_top(results_mlx[3], "TP10");
+                } else {
+                    print_top(results_cpu[0], "TP9"); std::cout << "  ";
+                    print_top(results_cpu[1], "AF7"); std::cout << "  ";
+                    print_top(results_cpu[2], "AF8"); std::cout << "  ";
+                    print_top(results_cpu[3], "TP10");
+                }
+                std::array<int,4> hs = {hs_last[0].load(), hs_last[1].load(), hs_last[2].load(), hs_last[3].load()};
+                std::cout << "  HS=[" << hs[0] << "," << hs[1] << "," << hs[2] << "," << hs[3] << "]";
+                std::cout << " blink=" << blink_pending.load() << " jaw=" << jaw_pending.load();
+                std::cout << std::endl;
+                last_feedback_time = now;
+            }
+        }
+
+        last_processed = sc;
+    }
+}
+
+void handle_muse_start(const std::vector<std::string>& args) {
+    if (live_running.load()) { std::cout << "Live mode already running." << std::endl; return; }
+    if (args.size() < 3) {
+        std::cout << "Usage: muse_start <port> <csv_path> <json_dir> [--window L] [--hop H] [--order K] [--refine 0|1] [--backend auto|mlx|cpu] [--feedback_top N] [--json_max_mb MB] [--json_max_files N] [--json_flush_interval_ms MS]" << std::endl;
+        return;
+    }
+
+    // Validate existing backend & dictionary
+    int dict_len = 0;
+    int dict_size = 0;
+    std::string backend_name = "";
+    if (act_accel_f && backend_sel == BackendSel::MLX) { dict_len = act_accel_f->get_length(); dict_size = act_accel_f->get_dict_size(); backend_name = "MLX(f32)"; }
+    else if (act_cpu) { dict_len = act_cpu->get_length(); dict_size = act_cpu->get_dict_size(); backend_name = "CPU"; }
+    else if (act_accel) { dict_len = act_accel->get_length(); dict_size = act_accel->get_dict_size(); backend_name = "ACCEL"; }
+    else { std::cout << "Error: No dictionary loaded. Use 'create_dictionary' or 'load_dictionary' first (CPU or MLX)." << std::endl; return; }
+
+    try {
+        live_port = std::stoi(args[0]);
+    } catch (...) { std::cout << "Invalid port." << std::endl; return; }
+    live_csv_path = args[1];
+    live_json_base = args[2];
+
+    // Defaults
+    live_window = dict_len;
+    live_hop = 64;
+    live_order = 10;
+    live_refine = true;
+    live_feedback_top = 1;
+    live_quiet = true;
+    live_feedback_interval_ms = 1000;
+    live_backend = LiveBackend::AUTO;
+    size_t json_max_mb = 25, json_max_files = 10, json_flush_ms = 1000;
+
+    // Parse optional flags
+    for (size_t i = 3; i + 1 < args.size(); i += 2) {
+        const std::string& k = args[i]; const std::string& v = args[i+1];
+        if (k == "--window") live_window = std::stoi(v);
+        else if (k == "--hop") live_hop = std::stoi(v);
+        else if (k == "--order") live_order = std::stoi(v);
+        else if (k == "--refine") live_refine = (v == "1" || v == "true" || v == "TRUE");
+        else if (k == "--backend") {
+            if (v == "mlx") live_backend = LiveBackend::MLX; else if (v == "cpu") live_backend = LiveBackend::CPU; else live_backend = LiveBackend::AUTO;
+        }
+        else if (k == "--feedback_top") live_feedback_top = std::stoi(v);
+        else if (k == "--feedback_interval_ms") live_feedback_interval_ms = (size_t)std::stoul(v);
+        else if (k == "--quiet") live_quiet = (v == "1" || v == "true" || v == "TRUE");
+        else if (k == "--json_max_mb") json_max_mb = (size_t)std::stoul(v);
+        else if (k == "--json_max_files") json_max_files = (size_t)std::stoul(v);
+        else if (k == "--json_flush_interval_ms") json_flush_ms = (size_t)std::stoul(v);
+        else { std::cout << "Unknown flag: " << k << std::endl; return; }
+    }
+
+    if (live_window != dict_len) {
+        std::cout << "Error: --window (" << live_window << ") must match dictionary length (" << dict_len << ")." << std::endl;
+        return;
+    }
+
+    // Init NDJSON logger (assumes json_dir exists)
+    std::string session_ts = iso8601_now();
+    live_session_id = session_ts; // simple session id
+    std::string ndjson_path = live_json_base + "/session_" + session_ts + ".ndjson";
+    try {
+        logging::NDJSONLogger::init_rotating(ndjson_path, json_max_mb, json_max_files, json_flush_ms);
+    } catch (const std::exception& e) {
+        std::cerr << "Failed to init logger: " << e.what() << std::endl;
+        return;
+    }
+
+    logging::ParamRangesJson pr{param_ranges.tc_min, param_ranges.tc_max, param_ranges.tc_step,
+                                param_ranges.fc_min, param_ranges.fc_max, param_ranges.fc_step,
+                                param_ranges.logDt_min, param_ranges.logDt_max, param_ranges.logDt_step,
+                                param_ranges.c_min, param_ranges.c_max, param_ranges.c_step};
+    logging::NDJSONLogger::log_session_meta(live_session_id, sampling_frequency, live_window, live_hop, live_order, live_window - live_hop, pr, backend_name, dict_size);
+
+    // Prepare ring buffers
+    rb_capacity = (size_t)live_window * 8;
+    rb_tp9.reset(rb_capacity); rb_af7.reset(rb_capacity); rb_af8.reset(rb_capacity); rb_tp10.reset(rb_capacity);
+
+    // Open CSV
+    {
+        std::lock_guard<std::mutex> lk(live_csv_mu);
+        live_csv.open(live_csv_path);
+        if (!live_csv.is_open()) { std::cout << "Error: cannot open CSV path." << std::endl; return; }
+        live_csv << "timestamp,TP9,AF7,AF8,TP10,horseshoe_TP9,horseshoe_AF7,horseshoe_AF8,horseshoe_TP10,blink,jaw_clench\n";
+    }
+
+    // Start OSC receiver
+    muse_rx.reset(new MuseOSCReceiver());
+    muse_rx->on_eeg([](double ts_sec, float tp9, float af7, float af8, float tp10){
+        rb_tp9.push(tp9); rb_af7.push(af7); rb_af8.push(af8); rb_tp10.push(tp10);
+        int b = blink_pending.exchange(0);
+        int j = jaw_pending.exchange(0);
+        int h0 = hs_last[0].load(); int h1 = hs_last[1].load(); int h2 = hs_last[2].load(); int h3 = hs_last[3].load();
+        {
+            std::lock_guard<std::mutex> lk(live_csv_mu);
+            if (live_csv.is_open()) {
+                live_csv << std::fixed << std::setprecision(6) << ts_sec << ","
+                         << tp9 << "," << af7 << "," << af8 << "," << tp10 << ","
+                         << h0 << "," << h1 << "," << h2 << "," << h3 << ","
+                         << b << "," << j << "\n";
+            }
+        }
+        sample_counter.fetch_add(1);
+    });
+    muse_rx->on_horseshoe([](double /*ts*/, const std::array<int,4>& hs){
+        hs_last[0].store(hs[0]); hs_last[1].store(hs[1]); hs_last[2].store(hs[2]); hs_last[3].store(hs[3]);
+        logging::NDJSONLogger::log_quality_event(hs, blink_pending.load(), jaw_pending.load(), iso8601_now());
+    });
+    muse_rx->on_blink([](double /*ts*/, int blink){ blink_pending.store(blink ? 1 : 0); });
+    muse_rx->on_jaw([](double /*ts*/, int jaw){ jaw_pending.store(jaw ? 1 : 0); });
+
+    if (!muse_rx->start(live_port)) { std::cout << "Failed to start OSC receiver." << std::endl; return; }
+
+    live_running = true;
+    last_processed = 0;
+    analysis_th = std::thread(live_analysis_loop);
+    std::cout << "Live OSC started on port " << live_port << ", window=" << live_window << ", hop=" << live_hop << ", order=" << live_order << ", refine=" << (live_refine?"1":"0") << "." << std::endl;
+}
+
+void handle_muse_stop(const std::vector<std::string>& /*args*/) {
+    if (!live_running.load()) { std::cout << "Live mode not running." << std::endl; return; }
+    live_running = false;
+    if (muse_rx) muse_rx->stop();
+    if (analysis_th.joinable()) analysis_th.join();
+    {
+        std::lock_guard<std::mutex> lk(live_csv_mu);
+        if (live_csv.is_open()) live_csv.close();
+    }
+    logging::NDJSONLogger::shutdown();
+    std::cout << "Live OSC stopped." << std::endl;
+}
+
+void handle_muse_status(const std::vector<std::string>& /*args*/) {
+    std::cout << "Live: " << (live_running.load()?"ON":"OFF") << ", port=" << live_port << std::endl;
+    std::cout << "RB fill: TP9=" << rb_tp9.size() << "/" << rb_capacity
+              << " AF7=" << rb_af7.size() << "/" << rb_capacity
+              << " AF8=" << rb_af8.size() << "/" << rb_capacity
+              << " TP10=" << rb_tp10.size() << "/" << rb_capacity << std::endl;
+    std::array<int,4> hs = {hs_last[0].load(), hs_last[1].load(), hs_last[2].load(), hs_last[3].load()};
+    std::cout << "Horseshoe: [" << hs[0] << "," << hs[1] << "," << hs[2] << "," << hs[3] << "]" << std::endl;
+    std::cout << "Pending: blink=" << blink_pending.load() << " jaw=" << jaw_pending.load() << std::endl;
+}
+#endif
         linenoiseFree(line_c);
 
         std::stringstream ss(line);
@@ -121,6 +498,12 @@ int main() {
             handle_analyze_samples(args);
         } else if (command == "show_params") {
             print_current_params();
+        } else if (command == "muse_start") {
+            handle_muse_start(args);
+        } else if (command == "muse_stop") {
+            handle_muse_stop(args);
+        } else if (command == "muse_status") {
+            handle_muse_status(args);
         } else if (command == "help") {
             print_help();
         } else if (command == "exit") {
@@ -1000,6 +1383,9 @@ void print_help() {
     std::cout << "  load_dictionary <filepath>                      - Load a dictionary from a file and print its summary.\n";
     std::cout << "  analyze <num_chirplets> <residual_threshold> [save <filename>] - Run ACT analysis to find the top N chirplets.\n";
     std::cout << "  analyze_samples <num_chirps> <end_sample> <overlap> [save <filename>] - Analyze sequence of samples with overlap.\n";
+    std::cout << "  muse_start <port> <csv_path> <json_dir> [--window L] [--hop H] [--order K] [--refine 0|1] [--backend auto|mlx|cpu] [--feedback_top N] [--feedback_interval_ms MS] [--quiet 0|1] [--json_max_mb MB] [--json_max_files N] [--json_flush_interval_ms MS] - Start live OSC analysis.\n";
+    std::cout << "  muse_status                                     - Show live capture/analyze status.\n";
+    std::cout << "  muse_stop                                       - Stop live OSC analysis.\n";
     std::cout << "  help                                            - Show this help message.\n";
     std::cout << "  exit                                            - Exit the application.\n" << std::endl;
 }
@@ -1037,4 +1423,315 @@ void print_dict_summary() {
     int dsz = (act_legacy ? act_legacy->get_dict_size() : (act_cpu ? act_cpu->get_dict_size() : (act_accel_f ? act_accel_f->get_dict_size() : (act_accel ? act_accel->get_dict_size() : 0))));
     std::cout << "Dictionary size: " << dsz << std::endl;
     std::cout << "--------------------------\n";
+}
+
+// --- Live mode implementation (file-scope definitions) ---
+static std::string iso8601_now() {
+    using namespace std::chrono;
+    auto now = system_clock::now();
+    std::time_t t = system_clock::to_time_t(now);
+    std::tm tm{};
+#if defined(_WIN32)
+    localtime_s(&tm, &t);
+#else
+    localtime_r(&t, &tm);
+#endif
+    char buf[32];
+    std::strftime(buf, sizeof(buf), "%Y-%m-%dT%H:%M:%S", &tm);
+    return std::string(buf);
+}
+
+static void live_analysis_loop() {
+    // Determine backend
+    bool use_mlx = false;
+    ACT_MLX_f* act_mlx = nullptr;
+    ACT_CPU* act_cpu_ptr = nullptr;
+    ACT_Accelerate* act_accel_ptr = nullptr;
+
+    if (live_backend == LiveBackend::MLX || (live_backend == LiveBackend::AUTO && backend_sel == BackendSel::MLX)) {
+        if (act_accel_f) {
+            act_mlx = dynamic_cast<ACT_MLX_f*>(act_accel_f.get());
+            if (act_mlx) use_mlx = true;
+        }
+    }
+    if (!use_mlx) {
+        if (act_cpu) act_cpu_ptr = act_cpu.get();
+        else if (act_accel) act_accel_ptr = act_accel.get();
+    }
+
+    ACT_CPU::TransformOptions opts; opts.order = live_order; opts.refine = live_refine; opts.residual_threshold = 1e-6;
+
+    while (live_running.load()) {
+        int64_t sc = sample_counter.load();
+        if (sc - last_processed < live_hop) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+            continue;
+        }
+        // Need enough data buffered
+        if (rb_tp9.size() < (size_t)live_window || rb_af7.size() < (size_t)live_window || rb_af8.size() < (size_t)live_window || rb_tp10.size() < (size_t)live_window) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+            continue;
+        }
+
+        const int64_t window_start = sc - live_window;
+
+        // Gather windows
+        std::vector<float> v_tp9, v_af7, v_af8, v_tp10;
+        if (!rb_tp9.latestWindow(live_window, v_tp9)) continue;
+        if (!rb_af7.latestWindow(live_window, v_af7)) continue;
+        if (!rb_af8.latestWindow(live_window, v_af8)) continue;
+        if (!rb_tp10.latestWindow(live_window, v_tp10)) continue;
+
+        // Convert to Eigen::VectorXd (double)
+        std::vector<Eigen::VectorXd> xs;
+        xs.reserve(4);
+        auto copy_to_eig = [](const std::vector<float>& v){
+            Eigen::VectorXd x(v.size());
+            for (size_t i = 0; i < v.size(); ++i) x[(int)i] = (double)v[i];
+            return x;
+        };
+        xs.emplace_back(copy_to_eig(v_tp9));
+        xs.emplace_back(copy_to_eig(v_af7));
+        xs.emplace_back(copy_to_eig(v_af8));
+        xs.emplace_back(copy_to_eig(v_tp10));
+
+        // Run batched analysis
+        std::vector<ACT_CPU::TransformResult> results_cpu;
+        std::vector<ACT_CPU_f::TransformResult> results_mlx;
+        if (use_mlx && act_mlx) {
+            auto r = actmlx::transform_batch(*act_mlx, xs, opts);
+            results_mlx = std::move(r);
+        } else if (act_cpu_ptr) {
+            results_cpu = actmt::transform_batch(*act_cpu_ptr, xs, opts);
+        } else if (act_accel_ptr) {
+            results_cpu = actmt::transform_batch(*act_accel_ptr, xs, opts);
+        } else {
+            std::cout << "[live] No suitable backend available; stopping analysis." << std::endl;
+            live_running = false;
+            break;
+        }
+
+        // Emit NDJSON and CLI feedback
+        for (int ch = 0; ch < 4; ++ch) {
+            const char* cname = kChannels[ch];
+            int used_order = 0;
+            double err = 0.0;
+            std::vector<logging::ChirpletJson> chirps;
+            if (use_mlx) {
+                const auto& R = results_mlx[ch];
+                used_order = (int)R.params.rows();
+                err = (double)R.error;
+                chirps.reserve(used_order);
+                for (int i = 0; i < used_order; ++i) {
+                    double tc_local = (double)R.params(i,0);
+                    double tc_global = tc_local + (double)window_start;
+                    chirps.push_back({
+                        tc_global,
+                        tc_global / sampling_frequency,
+                        (double)R.params(i,1),
+                        1000.0 * std::exp((double)R.params(i,2)),
+                        (double)R.params(i,3),
+                        (double)R.coeffs[i]
+                    });
+                }
+            } else {
+                const auto& R = results_cpu[ch];
+                used_order = (int)R.params.rows();
+                err = R.error;
+                chirps.reserve(used_order);
+                for (int i = 0; i < used_order; ++i) {
+                    double tc_local = R.params(i,0);
+                    double tc_global = tc_local + (double)window_start;
+                    chirps.push_back({
+                        tc_global,
+                        tc_global / sampling_frequency,
+                        R.params(i,1),
+                        1000.0 * std::exp(R.params(i,2)),
+                        R.params(i,3),
+                        R.coeffs[i]
+                    });
+                }
+            }
+
+            // NDJSON line
+            logging::NDJSONLogger::log_window_result(cname, window_start, err, used_order, chirps, iso8601_now());
+        }
+
+        // Live CLI feedback (top N)
+        auto print_top = [&](auto& R, const char* cname){
+            int k = std::min(live_feedback_top, (int)R.params.rows());
+            std::cout << cname << " found=" << R.params.rows() << "/" << live_order;
+            for (int i = 0; i < k; ++i) {
+                double tc_s = ((double)R.params(i,0) + (double)window_start) / sampling_frequency;
+                double fc = (double)R.params(i,1);
+                double dur_ms = 1000.0 * std::exp((double)R.params(i,2));
+                double c = (double)R.params(i,3);
+                double a = (double)R.coeffs[i];
+                std::cout << " | tc=" << std::fixed << std::setprecision(3) << tc_s
+                          << "s fc=" << std::setprecision(1) << fc
+                          << "Hz dur=" << std::setprecision(0) << dur_ms
+                          << "ms c=" << std::setprecision(1) << c
+                          << "Hz/s a=" << std::setprecision(3) << a;
+            }
+            std::cout << "";
+        };
+
+        std::cout << "[WIN start=" << window_start << "] ";
+        if (use_mlx) {
+            print_top(results_mlx[0], "TP9"); std::cout << "  ";
+            print_top(results_mlx[1], "AF7"); std::cout << "  ";
+            print_top(results_mlx[2], "AF8"); std::cout << "  ";
+            print_top(results_mlx[3], "TP10");
+        } else {
+            print_top(results_cpu[0], "TP9"); std::cout << "  ";
+            print_top(results_cpu[1], "AF7"); std::cout << "  ";
+            print_top(results_cpu[2], "AF8"); std::cout << "  ";
+            print_top(results_cpu[3], "TP10");
+        }
+        std::array<int,4> hs = {hs_last[0].load(), hs_last[1].load(), hs_last[2].load(), hs_last[3].load()};
+        std::cout << "  HS=[" << hs[0] << "," << hs[1] << "," << hs[2] << "," << hs[3] << "]";
+        std::cout << " blink=" << blink_pending.load() << " jaw=" << jaw_pending.load();
+        std::cout << std::endl;
+
+        last_processed = sc;
+    }
+}
+
+void handle_muse_start(const std::vector<std::string>& args) {
+    if (live_running.load()) { std::cout << "Live mode already running." << std::endl; return; }
+    if (args.size() < 3) {
+        std::cout << "Usage: muse_start <port> <csv_path> <json_dir> [--window L] [--hop H] [--order K] [--refine 0|1] [--backend auto|mlx|cpu] [--feedback_top N] [--json_max_mb MB] [--json_max_files N] [--json_flush_interval_ms MS]" << std::endl;
+        return;
+    }
+
+    // Validate existing backend & dictionary
+    int dict_len = 0;
+    int dict_size = 0;
+    std::string backend_name = "";
+    if (act_accel_f && backend_sel == BackendSel::MLX) { dict_len = act_accel_f->get_length(); dict_size = act_accel_f->get_dict_size(); backend_name = "MLX(f32)"; }
+    else if (act_cpu) { dict_len = act_cpu->get_length(); dict_size = act_cpu->get_dict_size(); backend_name = "CPU"; }
+    else if (act_accel) { dict_len = act_accel->get_length(); dict_size = act_accel->get_dict_size(); backend_name = "ACCEL"; }
+    else { std::cout << "Error: No dictionary loaded. Use 'create_dictionary' or 'load_dictionary' first (CPU or MLX)." << std::endl; return; }
+
+    try {
+        live_port = std::stoi(args[0]);
+    } catch (...) { std::cout << "Invalid port." << std::endl; return; }
+    live_csv_path = args[1];
+    live_json_base = args[2];
+
+    // Defaults
+    live_window = dict_len;
+    live_hop = 64;
+    live_order = 10;
+    live_refine = true;
+    live_feedback_top = 1;
+    live_backend = LiveBackend::AUTO;
+    size_t json_max_mb = 25, json_max_files = 10, json_flush_ms = 1000;
+
+    // Parse optional flags
+    for (size_t i = 3; i + 1 < args.size(); i += 2) {
+        const std::string& k = args[i]; const std::string& v = args[i+1];
+        if (k == "--window") live_window = std::stoi(v);
+        else if (k == "--hop") live_hop = std::stoi(v);
+        else if (k == "--order") live_order = std::stoi(v);
+        else if (k == "--refine") live_refine = (v == "1" || v == "true" || v == "TRUE");
+        else if (k == "--backend") {
+            if (v == "mlx") live_backend = LiveBackend::MLX; else if (v == "cpu") live_backend = LiveBackend::CPU; else live_backend = LiveBackend::AUTO;
+        }
+        else if (k == "--feedback_top") live_feedback_top = std::stoi(v);
+        else if (k == "--json_max_mb") json_max_mb = (size_t)std::stoul(v);
+        else if (k == "--json_max_files") json_max_files = (size_t)std::stoul(v);
+        else if (k == "--json_flush_interval_ms") json_flush_ms = (size_t)std::stoul(v);
+        else { std::cout << "Unknown flag: " << k << std::endl; return; }
+    }
+
+    if (live_window != dict_len) {
+        std::cout << "Error: --window (" << live_window << ") must match dictionary length (" << dict_len << ")." << std::endl;
+        return;
+    }
+
+    // Init NDJSON logger (assumes json_dir exists)
+    std::string session_ts = iso8601_now();
+    live_session_id = session_ts; // simple session id
+    std::string ndjson_path = live_json_base + "/session_" + session_ts + ".ndjson";
+    try {
+        logging::NDJSONLogger::init_rotating(ndjson_path, json_max_mb, json_max_files, json_flush_ms);
+    } catch (const std::exception& e) {
+        std::cerr << "Failed to init logger: " << e.what() << std::endl;
+        return;
+    }
+
+    logging::ParamRangesJson pr{param_ranges.tc_min, param_ranges.tc_max, param_ranges.tc_step,
+                                param_ranges.fc_min, param_ranges.fc_max, param_ranges.fc_step,
+                                param_ranges.logDt_min, param_ranges.logDt_max, param_ranges.logDt_step,
+                                param_ranges.c_min, param_ranges.c_max, param_ranges.c_step};
+    logging::NDJSONLogger::log_session_meta(live_session_id, sampling_frequency, live_window, live_hop, live_order, live_window - live_hop, pr, backend_name, dict_size);
+
+    // Prepare ring buffers
+    rb_capacity = (size_t)live_window * 8;
+    rb_tp9.reset(rb_capacity); rb_af7.reset(rb_capacity); rb_af8.reset(rb_capacity); rb_tp10.reset(rb_capacity);
+
+    // Open CSV
+    {
+        std::lock_guard<std::mutex> lk(live_csv_mu);
+        live_csv.open(live_csv_path);
+        if (!live_csv.is_open()) { std::cout << "Error: cannot open CSV path." << std::endl; return; }
+        live_csv << "timestamp,TP9,AF7,AF8,TP10,horseshoe_TP9,horseshoe_AF7,horseshoe_AF8,horseshoe_TP10,blink,jaw_clench\n";
+    }
+
+    // Start OSC receiver
+    muse_rx.reset(new MuseOSCReceiver());
+    muse_rx->on_eeg([](double ts_sec, float tp9, float af7, float af8, float tp10){
+        rb_tp9.push(tp9); rb_af7.push(af7); rb_af8.push(af8); rb_tp10.push(tp10);
+        int b = blink_pending.exchange(0);
+        int j = jaw_pending.exchange(0);
+        int h0 = hs_last[0].load(); int h1 = hs_last[1].load(); int h2 = hs_last[2].load(); int h3 = hs_last[3].load();
+        {
+            std::lock_guard<std::mutex> lk(live_csv_mu);
+            if (live_csv.is_open()) {
+                live_csv << std::fixed << std::setprecision(6) << ts_sec << ","
+                         << tp9 << "," << af7 << "," << af8 << "," << tp10 << ","
+                         << h0 << "," << h1 << "," << h2 << "," << h3 << ","
+                         << b << "," << j << "\n";
+            }
+        }
+        sample_counter.fetch_add(1);
+    });
+    muse_rx->on_horseshoe([](double /*ts*/, const std::array<int,4>& hs){
+        hs_last[0].store(hs[0]); hs_last[1].store(hs[1]); hs_last[2].store(hs[2]); hs_last[3].store(hs[3]);
+        logging::NDJSONLogger::log_quality_event(hs, blink_pending.load(), jaw_pending.load(), iso8601_now());
+    });
+    muse_rx->on_blink([](double /*ts*/, int blink){ blink_pending.store(blink ? 1 : 0); });
+    muse_rx->on_jaw([](double /*ts*/, int jaw){ jaw_pending.store(jaw ? 1 : 0); });
+
+    if (!muse_rx->start(live_port)) { std::cout << "Failed to start OSC receiver." << std::endl; return; }
+
+    live_running = true;
+    last_processed = 0;
+    analysis_th = std::thread(live_analysis_loop);
+    std::cout << "Live OSC started on port " << live_port << ", window=" << live_window << ", hop=" << live_hop << ", order=" << live_order << ", refine=" << (live_refine?"1":"0") << "." << std::endl;
+}
+
+void handle_muse_stop(const std::vector<std::string>& /*args*/) {
+    if (!live_running.load()) { std::cout << "Live mode not running." << std::endl; return; }
+    live_running = false;
+    if (muse_rx) muse_rx->stop();
+    if (analysis_th.joinable()) analysis_th.join();
+    {
+        std::lock_guard<std::mutex> lk(live_csv_mu);
+        if (live_csv.is_open()) live_csv.close();
+    }
+    logging::NDJSONLogger::shutdown();
+    std::cout << "Live OSC stopped." << std::endl;
+}
+
+void handle_muse_status(const std::vector<std::string>& /*args*/) {
+    std::cout << "Live: " << (live_running.load()?"ON":"OFF") << ", port=" << live_port << std::endl;
+    std::cout << "RB fill: TP9=" << rb_tp9.size() << "/" << rb_capacity
+              << " AF7=" << rb_af7.size() << "/" << rb_capacity
+              << " AF8=" << rb_af8.size() << "/" << rb_capacity
+              << " TP10=" << rb_tp10.size() << "/" << rb_capacity << std::endl;
+    std::array<int,4> hs = {hs_last[0].load(), hs_last[1].load(), hs_last[2].load(), hs_last[3].load()};
+    std::cout << "Horseshoe: [" << hs[0] << "," << hs[1] << "," << hs[2] << "," << hs[3] << "]" << std::endl;
+    std::cout << "Pending: blink=" << blink_pending.load() << " jaw=" << jaw_pending.load() << std::endl;
 }
