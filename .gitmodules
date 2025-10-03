@@ -1,3 +1,9 @@
 [submodule "third_party/mlx"]
-	path = third_party/mlx
+	path = actlib/lib/mlx
 	url = https://github.com/ml-explore/mlx
+[submodule "apps/eeg_act_analyzer/lib/oscpp"]
+	path = apps/eeg_act_analyzer/lib/oscpp
+	url = https://github.com/kaoskorobase/oscpp.git
+[submodule "apps/eeg_act_analyzer/lib/spdlog"]
+	path = apps/eeg_act_analyzer/lib/spdlog
+	url = https://github.com/gabime/spdlog.git
