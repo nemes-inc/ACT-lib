@@ -20,23 +20,24 @@ message(STATUS "pyact: MLX_LINK=${MLX_LINK}")
 # Extension target
 pybind11_add_module(mpbfgs
     src/mpem_module.cpp
-    ../../ACT_CPU.cpp
-    ../../ACT_Accelerate.cpp
-    ../../ACT_MLX.cpp
+    ../../actlib/src/ACT.cpp
+    ../../actlib/src/ACT_CPU.cpp
+    ../../actlib/src/ACT_Accelerate.cpp
+    ../../actlib/src/ACT_MLX.cpp
     # ALGLIB sources (generic, portable; exclude x86-specific kernels)
-    ../../alglib/alglib-cpp/src/alglibinternal.cpp
-    ../../alglib/alglib-cpp/src/alglibmisc.cpp
-    ../../alglib/alglib-cpp/src/ap.cpp
-    ../../alglib/alglib-cpp/src/dataanalysis.cpp
-    ../../alglib/alglib-cpp/src/diffequations.cpp
-    ../../alglib/alglib-cpp/src/fasttransforms.cpp
-    ../../alglib/alglib-cpp/src/integration.cpp
-    ../../alglib/alglib-cpp/src/interpolation.cpp
-    ../../alglib/alglib-cpp/src/linalg.cpp
-    ../../alglib/alglib-cpp/src/optimization.cpp
-    ../../alglib/alglib-cpp/src/solvers.cpp
-    ../../alglib/alglib-cpp/src/specialfunctions.cpp
-    ../../alglib/alglib-cpp/src/statistics.cpp
+    ../../actlib/lib/alglib/alglib-cpp/src/alglibinternal.cpp
+    ../../actlib/lib/alglib/alglib-cpp/src/alglibmisc.cpp
+    ../../actlib/lib/alglib/alglib-cpp/src/ap.cpp
+    ../../actlib/lib/alglib/alglib-cpp/src/dataanalysis.cpp
+    ../../actlib/lib/alglib/alglib-cpp/src/diffequations.cpp
+    ../../actlib/lib/alglib/alglib-cpp/src/fasttransforms.cpp
+    ../../actlib/lib/alglib/alglib-cpp/src/integration.cpp
+    ../../actlib/lib/alglib/alglib-cpp/src/interpolation.cpp
+    ../../actlib/lib/alglib/alglib-cpp/src/linalg.cpp
+    ../../actlib/lib/alglib/alglib-cpp/src/optimization.cpp
+    ../../actlib/lib/alglib/alglib-cpp/src/solvers.cpp
+    ../../actlib/lib/alglib/alglib-cpp/src/specialfunctions.cpp
+    ../../actlib/lib/alglib/alglib-cpp/src/statistics.cpp
 )
 
 # Include directories
@@ -45,11 +46,9 @@ pybind11_add_module(mpbfgs
 # - Current source dir for binding sources
 
 target_include_directories(mpbfgs PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}/..
-    ${CMAKE_CURRENT_SOURCE_DIR}/../..
-    ${CMAKE_CURRENT_SOURCE_DIR}/../../..
-    ${CMAKE_CURRENT_SOURCE_DIR}/../../Eigen
-    ${CMAKE_CURRENT_SOURCE_DIR}/../../alglib/alglib-cpp/src
+    ${CMAKE_CURRENT_SOURCE_DIR}/../../actlib/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/../../actlib/lib/Eigen
+    ${CMAKE_CURRENT_SOURCE_DIR}/../../actlib/lib
     ${CMAKE_CURRENT_SOURCE_DIR}/src
 )
 

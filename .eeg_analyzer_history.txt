@@ -1,20 +1,3 @@
-params c -5 7 0.3
-params fc 4 70 2
-create_dictionary
-analyze 30 5
-analyze 50 10
-load_csv data/muse-testdata.csv
-select 21 1000 256
-params tc 0 245 5
-params fc 4 70 3
-params logDt -3 -1 0.1
-params c -5 7 0.3
-create_dictionary
-params c -40 40 1
-params logDt -1.897 -0.223 0.154
-create_dictionary
-analyze 10 10
-help
 exit
 load_csv data/muse-sleep-data1/Muse_Sleep_Sample_1/massimo_test_1_24139_24640_data.txt
 select 1 28214 256
@@ -98,3 +81,20 @@ load_csv data/muse-sleep-data1/Muse_Sleep_Sample_1/massimo_test_1_24139_24640_da
 select 1 28214 512
 analyze 10 1
 analyze 10 1 save muse_sleep_1_demo1_512_10_demo2.json
+load_dictionary ACT_512_Sub20Hz
+backend mlx
+load_dictionary ACT_512_Sub20Hz
+muse_start 5000 data/eeg_massimo1.csv data/json --order 5 --backend mlx
+muse-stop
+load_dictionary ACT_512_Sub20Hz
+muse_start 5000 data/eeg_massimo1.csv data/json --order 5 --backend mlx
+load_dictionary ACT_512_Sub20Hz
+muse_start 5000 data/eeg_massimo1.csv data/json --order 5 --backend mlx
+load_dictionary ACT_512_Sub20Hz
+muse_start 5000 data/eeg_massimo1.csv data/json --order 5 --backend mlx
+load_dictionary ACT_512_Sub20Hz
+muse_start 5000 data/eeg_massimo2.csv data/json --order 5 --backend mlx
+load_dictionary ACT_512_Sub20Hz
+muse_start 5000 data/eeg_massimo3.csv data/json --order 5 --backend mlx
+load_dictionary ACT_512_Sub20Hz
+muse_start 5000 data/eeg_massimo4.csv data/json --order 5 --backend mlx

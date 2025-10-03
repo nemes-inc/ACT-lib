@@ -58,7 +58,7 @@ static void print_timing(const std::string& op, double ms, const std::string& de
     std::cout << std::endl;
 }
 
-int main() {
+int main(int argc, char** argv) {
     print_separator("C++ ACT_MT PROFILING TEST - EEG SCALE (BATCH)");
 
     // Configuration (mirrors profile_act.cpp defaults)
@@ -66,29 +66,47 @@ int main() {
     const int SIGNAL_LENGTH = 512;   // samples (2 s)
     const int TRANSFORM_ORDER = 10;  // chirplets
 
-    // Batch size via env (default 16)
+    // CLI options
     int BATCH = 16;
-    if (const char* b = std::getenv("ACT_PROFILE_BATCH")) {
-        try { BATCH = std::max(1, std::stoi(b)); } catch (...) {}
-    }
     bool coarse_only = false;
-    if (const char* e = std::getenv("ACT_COARSE_ONLY")) {
-        std::string s(e);
-        if (s == "1" || s == "true" || s == "TRUE") coarse_only = true;
+    std::string backend = "cpu"; // cpu | mlx
+
+    auto show_help = [&]() {
+        std::cout << "Usage: " << (argv && argv[0] ? argv[0] : "profile_act_mt") << " [options]\n"
+                  << "  --batch <N>\n"
+                  << "  --backend <cpu|mlx>\n"
+                  << "  --coarse-only\n"
+                  << "  -h, --help\n";
+    };
+
+    for (int i = 1; i < argc; ++i) {
+        std::string a(argv[i]);
+        if (a == "-h" || a == "--help") { show_help(); return 0; }
+        else if (a.rfind("--batch=", 0) == 0) {
+            try { BATCH = std::max(1, std::stoi(a.substr(8))); } catch (...) { std::cerr << "Invalid --batch value\n"; return 1; }
+        } else if (a == "--batch" && i + 1 < argc) {
+            try { BATCH = std::max(1, std::stoi(argv[++i])); } catch (...) { std::cerr << "Invalid --batch value\n"; return 1; }
+        } else if (a.rfind("--backend=", 0) == 0) {
+            backend = a.substr(10);
+        } else if (a == "--backend" && i + 1 < argc) {
+            backend = argv[++i];
+        } else if (a == "--coarse-only") {
+            coarse_only = true;
+        } else {
+            std::cerr << "Unknown option: " << a << "\n";
+            show_help();
+            return 1;
+        }
     }
 
-    // Backend selection via env (cpu | mlx), default cpu
-    bool want_mlx = false;
-    if (const char* be = std::getenv("ACT_MT_BACKEND")) {
-        std::string b(be);
-        std::transform(b.begin(), b.end(), b.begin(), ::tolower);
-        if (b == "mlx" || b == "gpu") want_mlx = true;
-    }
+    // Normalize backend and honor compile-time MLX
+    std::transform(backend.begin(), backend.end(), backend.begin(), ::tolower);
+    bool want_mlx = (backend == "mlx" || backend == "gpu");
     bool use_mlx = false;
 #ifdef USE_MLX
-    use_mlx = want_mlx; // only honor when compiled with MLX
+    use_mlx = want_mlx;
 #else
-    (void)want_mlx;
+    (void)want_mlx; // MLX not compiled in
 #endif
 
     std::cout << "Configuration:" << std::endl;

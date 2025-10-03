@@ -1,24 +1,31 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Build and install MLX (C++ library) from the vendored submodule into third_party/mlx/install
+# Ensure we are running under bash (not sourced in zsh)
+if [ -z "${BASH_VERSION:-}" ]; then
+  echo "[setup_mlx] Please run this script with: bash scripts/setup_mlx.sh"
+  # If sourced, return; otherwise exit
+  return 1 2>/dev/null || exit 1
+fi
+
+# Build and install MLX (C++ library) from the vendored submodule into actlib/lib/mlx/install
 # Usage:
 #   ./scripts/setup_mlx.sh
 # Then build ACT with:
-#   make USE_MLX=1 MLX_INCLUDE=$(pwd)/third_party/mlx/install/include MLX_LIB=$(pwd)/third_party/mlx/install/lib MLX_LINK="-lmlx" -j8
+#   make USE_MLX=1 MLX_INCLUDE=$(pwd)/actlib/lib/mlx/install/include MLX_LIB=$(pwd)/actlib/lib/mlx/install/lib MLX_LINK="-lmlx" -j8
 
-ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-MLX_SRC="$ROOT_DIR/third_party/mlx"
+SCRIPT_PATH="${BASH_SOURCE[0]:-$0}"
+ROOT_DIR="$(cd "$(dirname "$SCRIPT_PATH")/.." && pwd)"
+MLX_SRC="$ROOT_DIR/actlib/lib/mlx"
 BUILD_DIR="$MLX_SRC/build"
 INSTALL_DIR="$MLX_SRC/install"
 
-# Detect submodule: note .git can be a file (gitdir) in submodules
-if ! git -C "$MLX_SRC" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-  if [ ! -e "$MLX_SRC/.git" ]; then
-    echo "[setup_mlx] ERROR: MLX submodule not found at $MLX_SRC"
-    echo "Run: git submodule update --init --recursive"
-    exit 1
-  fi
+# Detect sources (submodule or vendored tree)
+if [ ! -d "$MLX_SRC" ] || [ ! -f "$MLX_SRC/CMakeLists.txt" ]; then
+  echo "[setup_mlx] ERROR: MLX sources not found at $MLX_SRC"
+  echo "Ensure the MLX submodule is initialized or sources are present."
+  echo "Run: git submodule update --init --recursive"
+  exit 1
 fi
 
 # Tooling checks
@@ -28,6 +35,8 @@ if ! command -v cmake >/dev/null 2>&1; then
 fi
 
 mkdir -p "$BUILD_DIR" "$INSTALL_DIR"
+# Ensure metallib output directory exists for MLX_METAL_PATH
+mkdir -p "$INSTALL_DIR/lib"
 
 # Configure MLX
 cmake -S "$MLX_SRC" -B "$BUILD_DIR" \
@@ -35,7 +44,8 @@ cmake -S "$MLX_SRC" -B "$BUILD_DIR" \
   -DMLX_BUILD_TESTS=OFF \
   -DMLX_BUILD_EXAMPLES=OFF \
   -DMLX_BUILD_PYTHON_BINDINGS=OFF \
-  -DBUILD_SHARED_LIBS=OFF
+  -DBUILD_SHARED_LIBS=OFF \
+  -DMLX_METAL_PATH="$INSTALL_DIR/lib"
 
 # Build MLX (parallel)
 JOBS="8"
@@ -44,7 +54,7 @@ if command -v sysctl >/dev/null 2>&1; then
 fi
 cmake --build "$BUILD_DIR" -j"$JOBS"
 
-# Install into third_party/mlx/install
+# Install into actlib/lib/mlx/install
 cmake --install "$BUILD_DIR" --prefix "$INSTALL_DIR"
 
 # Print environment hints

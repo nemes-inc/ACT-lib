@@ -79,7 +79,7 @@ void print_timing(const std::string& operation, double time_ms, const std::strin
     std::cout << std::endl;
 }
 
-int main() {
+int main(int argc, char** argv) {
     print_separator("C++ ACT PROFILING TEST - EEG SCALE");
     
     // EEG-typical parameters
@@ -113,17 +113,34 @@ int main() {
     Timer timer;
     
     print_separator("DICTIONARY GENERATION");
-    
-    // Backend selection via env var
-    std::string backend = "cpu"; // default
-    if (const char* e = std::getenv("ACT_PROFILE_BACKEND")) backend = std::string(e);
-    std::string prec = "double"; // default
-    if (const char* p = std::getenv("ACT_PROFILE_PREC")) prec = std::string(p);
-    bool use_float = (prec == "float" || prec == "float32" || prec == "f32");
+
+    std::string backend = "cpu";
+    std::string prec = "double";
     bool coarse_only = false;
-    if (const char* e = std::getenv("ACT_COARSE_ONLY")) {
-        if (std::string(e) == "1" || std::string(e) == "true" || std::string(e) == "TRUE") coarse_only = true;
+
+    auto show_help = [&]() {
+        std::cout << "Usage: " << (argv && argv[0] ? argv[0] : "profile_act") << " [options]\n"
+                  << "  --backend <cpu|accel|mlx|act|legacy>\n"
+                  << "  --prec <double|float32>\n"
+                  << "  --coarse-only\n"
+                  << "  -h, --help\n";
+    };
+
+    for (int i = 1; i < argc; ++i) {
+        std::string a(argv[i]);
+        if (a == "-h" || a == "--help") { show_help(); return 0; }
+        else if (a.rfind("--backend=", 0) == 0) { backend = a.substr(10); }
+        else if (a == "--backend" && i + 1 < argc) { backend = argv[++i]; }
+        else if (a == "--coarse-only") { coarse_only = true; }
+        else if (a == "--prec=float32" || a == "--float32" || a == "--prec=f32") { prec = "float32"; }
+        else if (a == "--prec=double" || a == "--prec=float64" || a == "--double") { prec = "double"; }
+        else {
+            std::cerr << "Unknown option: " << a << "\n";
+            show_help();
+            return 1;
+        }
     }
+    bool use_float = (prec == "float32" || prec == "f32");
     std::cout << "Backend: " << backend << std::endl;
     std::cout << "Precision: " << (use_float ? "float32" : "double") << std::endl;
     std::cout << "Coarse Only: " << coarse_only << std::endl;
@@ -486,10 +503,7 @@ int main() {
     }
     
     // Memory usage estimate
-    size_t dict_bytes_per_elem = (std::getenv("ACT_PROFILE_PREC") &&
-                                  (std::string(std::getenv("ACT_PROFILE_PREC")) == "float" ||
-                                   std::string(std::getenv("ACT_PROFILE_PREC")) == "float32" ||
-                                   std::string(std::getenv("ACT_PROFILE_PREC")) == "f32")) ? sizeof(float) : sizeof(double);
+    size_t dict_bytes_per_elem = use_float ? sizeof(float) : sizeof(double);
     double dict_memory_mb = (actual_dict_size * SIGNAL_LENGTH * dict_bytes_per_elem) / (1024.0 * 1024.0);
     std::cout << "Dictionary Memory Usage: " << std::setprecision(1) << dict_memory_mb << " MB" << std::endl;
     

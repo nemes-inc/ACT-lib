@@ -79,7 +79,7 @@ transform_batch_mlx_gemm_coarse_only(const TAct& act,
                     R_rowmajor[static_cast<size_t>(i) * static_cast<size_t>(k) + static_cast<size_t>(j)] = R(i, j);
                 }
             }
-            mx::array R_gpu(R_rowmajor.data(), mx::Shape{m, k}, mx::float32);
+            mx::array R_gpu(R_rowmajor.data(), mx::Shape{m, k});
 
             // S = A^T * R  => {n, k}
             auto S = mx::matmul(mx::transpose(A_gpu), R_gpu);
@@ -149,10 +149,10 @@ transform_batch_mlx_gemm(const TAct& act,
                          const std::vector<Eigen::VectorXd>& signals,
                          const ACT_CPU::TransformOptions& opts) {
     using ResultT = typename TAct::TransformResult;
-    const int m = act.get_length();
-    const int n = act.get_dict_size();
     const int k = static_cast<int>(signals.size());
     if (k == 0) return {};
+    const int m = act.get_length();
+    const int n = act.get_dict_size();
 
 #ifndef USE_MLX
     return actmt::transform_batch_gemm(act, signals, opts);
@@ -194,7 +194,7 @@ transform_batch_mlx_gemm(const TAct& act,
                     R_rowmajor[static_cast<size_t>(i) * static_cast<size_t>(k) + static_cast<size_t>(j)] = R(i, j);
                 }
             }
-            mx::array R_gpu(R_rowmajor.data(), mx::Shape{m, k}, mx::float32);
+            mx::array R_gpu(R_rowmajor.data(), mx::Shape{m, k});
 
             // Coarse selection on device
             auto S = mx::matmul(mx::transpose(A_gpu), R_gpu); // {n, k}

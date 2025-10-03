@@ -14,7 +14,7 @@ set -euo pipefail
 #   python -m venv python/.venv && source python/.venv/bin/activate
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-MLX_SRC="$ROOT_DIR/third_party/mlx"
+MLX_SRC="$ROOT_DIR/actlib/lib/mlx"
 INSTALL_DIR="$MLX_SRC/install"
 INCLUDE_DIR="$INSTALL_DIR/include"
 LIB_DIR="$INSTALL_DIR/lib"
@@ -23,7 +23,7 @@ LIB_DIR="$INSTALL_DIR/lib"
 if [[ ! -f "$INCLUDE_DIR/mlx/mlx.h" ]]; then
   echo "[build_pyact_mlx] MLX headers not found at $INCLUDE_DIR/mlx/mlx.h"
   echo "[build_pyact_mlx] Building MLX via scripts/setup_mlx.sh ..."
-  echo "[build_pyact_mlx] bash $ROOT_DIR/scripts/setup_mlx.sh"
+  bash "$ROOT_DIR/scripts/setup_mlx.sh"
 else
   echo "[build_pyact_mlx] Found MLX header: $INCLUDE_DIR/mlx/mlx.h"
 fi

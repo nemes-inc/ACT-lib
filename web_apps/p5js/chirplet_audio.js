@@ -32,6 +32,76 @@
     }
     return Audio.ctx;
   }
+
+  // Live playback: schedule a short set of chirplets right away.
+  // 'chirps' should be an array of objects with fields matching NDJSON window_result:
+  //   { tc_seconds, duration_ms, fc_hz, c_hz_per_s, coeff }
+  // fsSignal is the source sampling rate (Hz), used only for window clamping in some modes (not critical here).
+  function playLiveChirplets(chirps, fsSignal) {
+    if (!Array.isArray(chirps) || chirps.length === 0) return;
+    const ctx = getCtx();
+    initAudioEngine();
+    if (ctx.state !== 'running') {
+      try { ctx.resume(); } catch(e) {}
+    }
+
+    // Normalize amplitudes across this small group
+    let sumCoeff2 = 0;
+    for (const c of chirps) {
+      const coeff = Number(c.coeff) || 0;
+      sumCoeff2 += coeff * coeff;
+    }
+    const coeffNorm = Math.sqrt(Math.max(1e-12, sumCoeff2));
+
+    const k = Audio.coverageK;
+    const base = ctx.currentTime + 0.05; // slight offset to avoid scheduling in the past
+    let latestStop = base;
+    for (const c of chirps) {
+      const Dt = (Number(c.duration_ms) || 0) / 1000.0;
+      const tc = Number(c.tc_seconds) || 0;
+      if (!(Dt > 0)) continue;
+      // Build internal chirplet object compatible with makeChirpletBuffer
+      const ch = {
+        time_center_seconds: tc,
+        duration_ms: Dt * 1000.0,
+        frequency_hz: Number(c.fc_hz) || 0,
+        chirp_rate_hz_per_s: Number(c.c_hz_per_s) || 0,
+        coefficient: Number(c.coeff) || 0,
+      };
+      // Playback window around tc (not clamped to any segment)
+      let t0 = tc - k * Dt;
+      let t1 = tc + k * Dt;
+      if (t1 <= t0) continue;
+
+      const buffer = makeChirpletBuffer(ch, t0, t1, fsSignal || 256, Audio.pitchScale, undefined, Audio.exportFrequencyMode);
+      const source = ctx.createBufferSource();
+      source.buffer = buffer;
+
+      const voiceGain = ctx.createGain();
+      const amp = (Math.abs(ch.coefficient) / coeffNorm) * Audio.mixGain;
+      voiceGain.gain.setValueAtTime(amp, ctx.currentTime);
+
+      source.connect(voiceGain);
+      voiceGain.connect(Audio.masterGain);
+
+      const when = base; // play immediately as a small cluster
+      try {
+        source.start(when);
+        source.stop(when + buffer.duration);
+      } catch(e) {
+        // ignore scheduling errors
+        continue;
+      }
+      const stopAt = when + buffer.duration;
+      if (stopAt > latestStop) latestStop = stopAt;
+      Audio.sources.push({ source, gain: voiceGain, when, stopAt });
+    }
+    Audio.isPlaying = true;
+    Audio.baseStartTime = base;
+    Audio.segmentStartSec = 0;
+    Audio.segmentDurationSec = Math.max(0, latestStop - base);
+    Audio.scheduledStopTime = latestStop;
+  }
   function audioBufferToWav(buffer) {
     // 16-bit PCM WAV encoder
     const numChannels = buffer.numberOfChannels;
@@ -578,6 +648,7 @@
     setExportFrequencyMode,
     setPlayVisibleOnly,
     playFromAnalysis,
+    playLiveChirplets,
     stopAll,
     exportWav,
     getIsPlaying,

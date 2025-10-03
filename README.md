@@ -6,7 +6,7 @@ A high-performance, general-purpose C++ implementation of the Adaptive Chirplet 
 
 The Adaptive Chirplet Transform (ACT) is a powerful signal processing technique that decomposes signals into chirplets - Gaussian-enveloped sinusoids with time-varying frequency. This implementation provides:
 
-- **High Performance**: Multi-platform CPU-only and GPU-accelerated code targeting Apple Metal and Intel x86/CUDA using the Apple MLX library.
+- **High Performance**: Multi-platform CPU-only with BLAS and GPU-accelerated code targeting Apple Metal and Intel x86/CUDA using the Apple MLX library.
 - **Flexible Analysis**: Configurable parameter ranges for different types of analysis.
 - **Example Tests and Applications**: Python bindings and example applications focused on EEG analysis.
 
@@ -33,7 +33,7 @@ This implementation uses a two-stage, greedy matching pursuit approach explored 
 - **MLX backend (GPU, float32)**: `ACT_MLX` enables a GPU-accelerated coarse search using Apple MLX when compiled with `USE_MLX=ON`. It pre-packs the dictionary to device and runs `scores = transpose(dict) @ x` and `argmax` on device. Double precision falls back to the CPU path.
 MLX can be compiled to run on Apple Metal or CUDA.
 - **Python bindings**: `python/act_bindings` exposes `pyact.mpbfgs` with `ActCPUEngine`, `ActMLXEngine`, and a backward-compatible `ActEngine` (CPU by default). `transform(...)` returns a rich dict. Tests are included.
-- **MLX build integration**: `scripts/setup_mlx.sh` installs the vendored MLX into `third_party/mlx/install/`. CMake options `USE_MLX`, `MLX_INCLUDE`, `MLX_LIB`, and `MLX_LINK` configure the Python build. `scripts/build_pyact_mlx.sh` builds the wheel with MLX enabled.
+- **MLX build integration**: `scripts/setup_mlx.sh` installs the vendored MLX into `actlib/lib/mlx/install/`. CMake options `USE_MLX`, `MLX_INCLUDE`, `MLX_LIB`, and `MLX_LINK` configure the Python build. `scripts/build_pyact_mlx.sh` builds the wheel with MLX enabled.
 - **EEG ML utilities**: `python/act_mlp` provides feature extraction based on ACT (defaults to `ActMLXEngine`) and a simple MLP training pipeline.
 - **Profiling**: `profile_act.cpp` measures end-to-end timings using a sample dictionary (dictionary, search, transform, SNR).
 - **CLI analyzer**: `eeg_act_analyzer` supports interactive exploration of CSV EEG data and ACT parameters.
@@ -121,20 +121,25 @@ cd <repository-name>
 # Build all targets
 make all
 
-# Run basic test
+# Runs tests
 make test
+```
+
+Performance profiling with default settings
+```bash
+make profile
 ```
 
 #### C++ build with MLX enabled (macOS)
 ```bash
 # 0) Initialize and build the vendored MLX once
 git submodule update --init --recursive
-bash scripts/setup_mlx.sh
+bash scripts/setup_mlx.sh   # builds and installs into actlib/lib/mlx/install/
 
-# 1) Build all C++ targets with MLX enabled on MacOSX
+# 1) Build all C++ targets with MLX enabled on macOS
 make USE_MLX=1 \
-     MLX_INCLUDE="$(pwd)/third_party/mlx/install/include" \
-     MLX_LIB="$(pwd)/third_party/mlx/install/lib" \
+     MLX_INCLUDE="$(pwd)/actlib/lib/mlx/install/include" \
+     MLX_LIB="$(pwd)/actlib/lib/mlx/install/lib" \
      MLX_LINK="-lmlx" \
      all
 ```
@@ -186,28 +191,33 @@ git submodule update --init --recursive
 # Alternatively, clone with submodules
 # git clone --recurse-submodules <repository-url>
 
-# Verify the submodule exists
-test -f third_party/mlx/CMakeLists.txt && echo "MLX submodule present"
 ```
 
 1) Build/install MLX into the vendored path:
 ```bash
 bash scripts/setup_mlx.sh
 ```
-2) Install the extension with MLX enabled. Either:
+
+2) Create a venv (optional but recommended):
+```bash
+python3 -m venv python/.venv
+source python/.venv/bin/activate
+```
+
+3) Install the extension with MLX enabled. Either:
 ```bash
 # A) Use environment variable (easiest)
 CMAKE_ARGS="-DUSE_MLX=ON \
-           -DMLX_INCLUDE=$(pwd)/third_party/mlx/install/include \
-           -DMLX_LIB=$(pwd)/third_party/mlx/install/lib \
+           -DMLX_INCLUDE=$(pwd)/actlib/lib/mlx/install/include \
+           -DMLX_LIB=$(pwd)/actlib/lib/mlx/install/lib \
            -DMLX_LINK=-lmlx" \
  python3 -m pip install -v ./python/act_bindings
 
 # B) Use repeated --config-settings (pip)
 python3 -m pip install -v ./python/act_bindings \
  --config-settings=cmake.args=-DUSE_MLX=ON \
- --config-settings=cmake.args=-DMLX_INCLUDE=$(pwd)/third_party/mlx/install/include \
- --config-settings=cmake.args=-DMLX_LIB=$(pwd)/third_party/mlx/install/lib \
+ --config-settings=cmake.args=-DMLX_INCLUDE=$(pwd)/actlib/lib/mlx/install/include \
+ --config-settings=cmake.args=-DMLX_LIB=$(pwd)/actlib/lib/mlx/install/lib \
  --config-settings=cmake.args=-DMLX_LINK=-lmlx
 
 # Or simply run the convenience script (does A for you)
@@ -220,17 +230,11 @@ During configure you should see:
 - `pyact: MLX_INCLUDE=...`
 - `pyact: Found MLX header at .../mlx/mlx.h`
 
-### Running specialized tests
+After a successful build/install, run quick smoke tests to verify the installation:
 ```bash
-# MLX backend test (runs CPU if MLX not enabled)
-make test_act_mlx
-
-# Performance profiling
-make profile
-
-# Python tests
 python3 -m pytest -q python/act_bindings/tests
 ```
+
 
 ### Interactive EEG ACT Analyzer (CLI)
 An interactive command-line tool is included to explore EEG CSV data and run ACT over selected windows.
@@ -285,16 +289,6 @@ ACT (Base)
 ├── ACT_Accelerate (Apple Accelerate-optimized CPU)
 └── ACT_MLX (MLX-accelerated coarse search for float32; CPU fallback otherwise)
 ```
-
-### Key Components
-- **ACT_CPU.h/.cpp**: Eigen + BLAS baseline backend
-- **ACT_Accelerate.h/.cpp**: Accelerate-optimized backend (macOS) with BLAS fallback
-- **ACT_MLX.h/.cpp**: MLX float32 device dictionary + matmul/argmax fast path
-- **python/act_bindings**: pybind11 extension exposing `pyact.mpbfgs`
-- **python/act_mlp**: EEG feature extraction and MLP training utilities
-- **test_*.cpp**: C++ unit and smoke tests
-- **profile_act.cpp**: End-to-end profiling of dictionary, search, and transform
-- **scripts/**: `setup_mlx.sh`, `build_pyact_mlx.sh` helpers
 
 ## Algorithm Details
 
@@ -390,21 +384,29 @@ auto result = act.transform(eeg_signal, 10);
 
 ```
 ACT_cpp/
-├── ACT_CPU.h/.cpp            # Eigen + BLAS baseline backend
-├── ACT_Accelerate.h/.cpp     # Accelerate-optimized backend (macOS)
-├── ACT_MLX.h/.cpp            # MLX float32 device dictionary + matmul/argmax
-├── ACT.h/.cpp (if present)   # Base helpers (historical)
-├── alglib/                   # ALGLIB numerical library
-├── Eigen/                    # Bundled Eigen headers
+├── actlib/
+│   ├── include/               # Public headers (ACT_CPU.h, ACT_Accelerate.h, ACT_MLX.h, ...)
+│   ├── src/                   # Core sources (ACT_CPU.cpp, ACT_Accelerate.cpp, ACT_MLX.cpp, ...)
+│   ├── test/                  # C++ tests & profiling (test_*.cpp, profile_act*.cpp, ...)
+│   └── lib/                   # Vendored/third-party libs used by C++
+│       ├── alglib/            # ALGLIB numerical library
+│       └── mlx/               # MLX submodule (C++)
+│           ├── build/         # Local build directory (generated)
+│           └── install/       # Headers/libs/metallib (generated)
+├── apps/
+│   └── eeg_act_analyzer/
+│       └── src/               # Interactive EEG CLI analyzer
 ├── python/
-│   ├── act_bindings/         # pybind11 extension (pyact.mpbfgs)
-│   └── act_mlp/              # EEG feature extraction + MLP utilities
-├── scripts/                  # setup_mlx.sh, build_pyact_mlx.sh, etc.
-├── profile_act.cpp           # Performance profiling
-├── data/                     # Sample EEG data
-│   └── muse-testdata.csv
-├── Makefile                  # Native build system
-└── README.md                 # This file
+│   ├── act_bindings/          # pybind11 extension (pyact.mpbfgs)
+│   ├── act_mlp/               # EEG feature extraction + MLP utilities
+│   └── rbf/                   # Experimental RBF trainer
+├── data/                      # Sample data (CSV, JSON, ndjson)
+├── docs/                      # Project documentation
+├── research/                  # Papers and references
+├── scripts/                   # setup_mlx.sh, build_pyact_mlx.sh, etc.
+├── web_apps/                  # Demos (e.g., p5js)
+├── Makefile                   # Native build system
+└── README.md                  # This file
 ```
 
 ### Background
@@ -431,9 +433,8 @@ Based on the seminal paper:
 - **No MLX speedup observed**: The MLX path accelerates the coarse search for float32 (`ACT_MLX_f`). Double precision falls back to CPU. In Python, `ActMLXEngine` uses float32 internally; ensure you built the wheel with `USE_MLX=ON`.
 
 ## Roadmap
-- Batched multi‑signal coarse search on CPU (single GEMM: `A^T @ X`) and MLX (`matmul(transpose(dict), X)`).
-- Top‑k selection per signal and optional batched refinement.
-- Additional benchmarks and CI for MLX-enabled wheels.
+- Improve the greedy matching pursuit algorithm
+
 
 ## License
 

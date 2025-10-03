@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>EEG Live Viewer</title>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, Segoe UI, Roboto, Oxygen, Ubuntu, Cantarell, 'Helvetica Neue', Arial, sans-serif; margin: 0; padding: 0; background: #fafafa; }
+    header { padding: 10px 16px; background: #222; color: #fff; }
+    main { display: grid; grid-template-columns: 280px 1fr; gap: 12px; padding: 12px; }
+    #controls { background: #fff; border: 1px solid #ddd; border-radius: 8px; padding: 12px; }
+    .control { margin-bottom: 10px; }
+    .row { display: flex; align-items: center; gap: 8px; }
+    label { font-size: 13px; color: #333; }
+    input[type="range"] { width: 160px; }
+    #canvas-container { background: #fff; border: 1px solid #ddd; border-radius: 8px; padding: 8px; }
+    .status { font-size: 12px; color: #555; margin-top: 6px; }
+    .pill { display: inline-block; padding: 2px 6px; border-radius: 10px; font-size: 11px; margin-right: 6px; }
+    .pill.ok { background: #e7f7ee; color: #1e7e34; }
+    .pill.warn { background: #fff4e5; color: #8a6d3b; }
+    .pill.bad { background: #fdecea; color: #b71c1c; }
+  </style>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.9.0/p5.min.js"></script>
+  <script src="/p5js/chirplet_audio.js"></script>
+  <script>
+    // Simple WS URL builder to current host
+    window.WS_URL = (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws';
+  </script>
+</head>
+<body>
+  <header>
+    <h3>EEG Live Viewer</h3>
+  </header>
+  <main>
+    <section id="controls">
+      <div class="control"><strong>Connection</strong></div>
+      <div class="control row">
+        <label>WS:</label>
+        <code id="wsUrlLabel"></code>
+        <span id="wsState" class="pill warn">connecting...</span>
+      </div>
+
+      <div class="control"><strong>View</strong></div>
+      <div class="control row">
+        <input type="checkbox" id="showRaw" checked />
+        <label for="showRaw">Show Raw</label>
+      </div>
+      <div class="control row">
+        <input type="checkbox" id="showChirps" checked />
+        <label for="showChirps">Show Chirplets</label>
+      </div>
+      <div class="control row">
+        <label for="windowSec">Window (s)</label>
+        <input type="range" id="windowSec" min="5" max="60" step="1" value="15" />
+        <span id="windowSecVal">15</span>
+      </div>
+
+      <div class="control"><strong>Audio</strong></div>
+      <div class="control row">
+        <input type="checkbox" id="audioOn" />
+        <label for="audioOn">Enable Audio (experimental)</label>
+      </div>
+      <div class="control row">
+        <label for="masterVolume">Volume</label>
+        <input type="range" id="masterVolume" min="0" max="1" step="0.01" value="0.2" />
+        <span id="masterVolumeValue">0.20</span>
+      </div>
+      <div class="status">
+        <div><strong>Session:</strong> <span id="sessionId">-</span></div>
+        <div><strong>FS:</strong> <span id="fs">-</span> Hz | <strong>Window:</strong> <span id="win">-</span> | <strong>Hop:</strong> <span id="hop">-</span> | <strong>Order:</strong> <span id="ord">-</span></div>
+        <div><strong>Backend:</strong> <span id="backend">-</span> | <strong>Dict:</strong> <span id="dict">-</span></div>
+        <div><strong>Quality (live):</strong> HS <span id="hs">[.,.,.,.]</span> | Blink <span id="blink">0</span> | Jaw <span id="jaw">0</span></div>
+      </div>
+    </section>
+    <section id="canvas-container"></section>
+  </main>
+  <script src="/p5js/live_sketch.js"></script>
+</body>
+</html>
