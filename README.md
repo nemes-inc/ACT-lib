@@ -149,6 +149,30 @@ Notes:
 - The MLX GPU coarse search path currently runs in float32; double precision falls back to the CPU path.
 - Linux/CUDA MLX linkage is under active development (see CUDA branch). If building on Linux, adjust link flags accordingly.
 
+#### C++ build with MLX enabled (Linux/CUDA)
+
+Prerequisites (Linux/CUDA):
+- NVIDIA Driver and CUDA Toolkit (nvcc)
+- cuBLAS and cuDNN runtime/dev libraries on your system library path
+- Optional: set `CUDA_HOME` and ensure `nvcc` is in `PATH`
+
+```bash
+# 0) Initialize and build the vendored MLX once (CUDA backend)
+git submodule update --init --recursive
+bash scripts/setup_mlx_cuda.sh   # builds and installs into actlib/lib/mlx/install/
+
+# 1) Build all C++ targets with MLX enabled on Linux/CUDA
+make USE_MLX=1 \
+     MLX_INCLUDE="$(pwd)/actlib/lib/mlx/install/include" \
+     MLX_LIB="$(pwd)/actlib/lib/mlx/install/lib" \
+     MLX_LINK="-lmlx -lcublasLt -lcublas -lcudnn" \
+     all
+
+# If the CUDA libraries are not found at runtime, export LD_LIBRARY_PATH, e.g.:
+export LD_LIBRARY_PATH="/usr/local/cuda/lib64:${LD_LIBRARY_PATH}"
+# You may also need: MLX_LINK="-lmlx -lcublasLt -lcublas -lcudnn -lcudart"
+```
+
 ### Python usage (pyact.mpbfgs)
 ```python
 import numpy as np
