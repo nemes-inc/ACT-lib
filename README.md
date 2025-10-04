@@ -34,18 +34,14 @@ This implementation uses a two-stage, greedy matching pursuit approach explored 
 MLX can be compiled to run on Apple Metal or CUDA.
 - **Python bindings**: `python/act_bindings` exposes `pyact.mpbfgs` with `ActCPUEngine`, `ActMLXEngine`, and a backward-compatible `ActEngine` (CPU by default). `transform(...)` returns a rich dict. Tests are included.
 - **MLX build integration**: `scripts/setup_mlx.sh` installs the vendored MLX into `actlib/lib/mlx/install/`. CMake options `USE_MLX`, `MLX_INCLUDE`, `MLX_LIB`, and `MLX_LINK` configure the Python build. `scripts/build_pyact_mlx.sh` builds the wheel with MLX enabled.
-- **EEG ML utilities**: `python/act_mlp` provides feature extraction based on ACT (defaults to `ActMLXEngine`) and a simple MLP training pipeline.
-- **Profiling**: `profile_act.cpp` measures end-to-end timings using a sample dictionary (dictionary, search, transform, SNR).
+- **EEG ML utilities**: `python/act_mlp` provides feature extraction based on ACT (defaults to `ActMLXEngine`) and a simple MLP training pipeline (Work in progress).
+- **Profiling**: `profile_act.cpp` and `profile_act_mt.cpp` measure end-to-end timings using a sample dictionary (dictionary, search, transform, SNR), single signal and batch of signals. Use `--help` to see options to select backend and precision.
 - **CLI analyzer**: `eeg_act_analyzer` supports interactive exploration of CSV EEG data and ACT parameters.
 
-__What’s next__
-- **Batched multi-signal coarse search**: `A^T @ X` for batches of 4–16 signals (CPU via GEMM, MLX via `matmul`).
-- **Top‑k per signal**: Efficient selection for batched scores.
-- **Batched transform**: Optional refinement (BFGS) per signal with a small thread pool.
 
 __How to try the faster search today__
-- Use `ACT_Accelerate` (CPU) or `ACT_MLX` (float32 MLX when enabled):
-  - Instantiate `ACT_Accelerate` or `ACT_MLX`, call `generate_chirplet_dictionary()`, then run `search_dictionary(...)` or `transform(...)`.
+- Use `ACT_CPU` (CPU) or `ACT_MLX` (float32 MLX when enabled):
+  - Instantiate `ACT_CPU` or `ACT_MLX`, call `generate_chirplet_dictionary()`, then run `search_dictionary(...)` or `transform(...)`.
   - `ACT_MLX` offloads the coarse search to MLX (GPU) when the project is built with `USE_MLX=ON`.
 
 
@@ -93,18 +89,7 @@ The result is a TransformResult object containing the chirplets found, the resid
 
 ## Quick Start
 
-### Installation (as of 2025-09-21)
-Full installation instructions are WIP. 
-On MacOSX Xcode and CMake are required.
-On Linux for CUDA the typical CUDA setup is required, MLX required NVidia NCCL to build
-
-These are the packages I had to install on Ubuntu 24.04 on top of the usual CUDA setup for PyTorch (Drivers, etc.)
-```bash
-sudo apt-get install libblas-dev liblapack-dev liblapacke-dev 
-sudo apt-get install libnccl2 libnccl-dev
-```
-
-Cuda Makefile is in the "cuda" branch, will merge soon.
+### Installation
 
 ### Prerequisites
 - C++17 compatible compiler
@@ -147,7 +132,6 @@ make USE_MLX=1 \
 Notes:
 - On macOS the Makefile links Apple Accelerate and Metal frameworks automatically.
 - The MLX GPU coarse search path currently runs in float32; double precision falls back to the CPU path.
-- Linux/CUDA MLX linkage is under active development (see CUDA branch). If building on Linux, adjust link flags accordingly.
 
 #### C++ build with MLX enabled (Linux/CUDA)
 
@@ -155,6 +139,12 @@ Prerequisites (Linux/CUDA):
 - NVIDIA Driver and CUDA Toolkit (nvcc)
 - cuBLAS and cuDNN runtime/dev libraries on your system library path
 - Optional: set `CUDA_HOME` and ensure `nvcc` is in `PATH`
+
+Suggested packages for Ubuntu (on top of typical CUDA setup):
+```bash
+sudo apt-get install libblas-dev liblapack-dev liblapacke-dev 
+sudo apt-get install libnccl2 libnccl-dev
+```
 
 ```bash
 # 0) Initialize and build the vendored MLX once (CUDA backend)
