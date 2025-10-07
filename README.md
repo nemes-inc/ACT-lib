@@ -1,4 +1,4 @@
-# C++ Adaptive Chirplet Transform (ACT) - C++ Implementation
+# Adaptive Chirplet Transform (ACT)
 
 A high-performance, general-purpose C++ implementation of the Adaptive Chirplet Transform for time-frequency analysis of non‑stationary signals. Suitable for audio, radar/sonar, biomedical, and other domains. 
 
