@@ -35,6 +35,23 @@ ACT_MLX_T<Scalar>::ACT_MLX_T(double FS,
         std::cout << "[ACT_MLX] MLX search is enabled for float32 when USE_MLX=1; double falls back to Accelerate CPU path" << std::endl;
         std::cout << std::endl;
     }
+
+    // Create a compiled function (do this once during initialization)
+    // NOTE: MLX compile requires a non-capturing callable. We therefore pass the
+    // dictionary A and the signal x as inputs to the compiled function.
+    #ifdef USE_MLX
+    if constexpr (std::is_same_v<Scalar, float>) {
+        search_fn_ = mx::compile([](const std::vector<mx::array>& inputs) {
+            // inputs[0] = A (m x n) row-major, inputs[1] = x (m)
+            const mx::array& A = inputs[0];
+            const mx::array& x = inputs[1];
+            auto scores = mx::matmul(mx::transpose(A), x); // shape {n}
+            auto idx = mx::argmax(scores);
+            auto best = mx::take(scores, idx);
+            return std::vector<mx::array>{idx, best};
+        });
+    }
+    #endif
 }
 
 template <typename Scalar>
@@ -71,14 +88,12 @@ std::pair<int, Scalar> ACT_MLX_T<Scalar>::search_dictionary(const Eigen::Ref<con
         // Upload signal as float32 1D array directly from Eigen data (one host->device copy)
         mx::array x_arr(const_cast<float*>(signal.data()), mx::Shape{m}, mx::float32);
 
-        // scores = A^T x, where A is (m x n) row-major on device
-        // Compute via matmul(transpose(A), x)
-        auto scores = mx::matmul(mx::transpose(*dict_gpu_), x_arr); // shape {n}
-
-        // Argmax and best value
-        auto idx_arr = mx::argmax(scores);
+        // Compiled path: call compiled function with inputs [A, x]
+        // Returns vector<array> with [idx, best_val]
+        std::vector<mx::array> outs = search_fn_({*dict_gpu_, x_arr});
+        auto idx_arr = outs[0];
+        auto best_val_arr = outs[1];
         int best_idx = idx_arr.template item<int>();
-        auto best_val_arr = mx::take(scores, best_idx);
         float best_val_f = best_val_arr.template item<float>();
         return {best_idx, static_cast<Scalar>(best_val_f)};
     }

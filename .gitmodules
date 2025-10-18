@@ -7,3 +7,6 @@
 [submodule "apps/eeg_act_analyzer/lib/spdlog"]
 	path = apps/eeg_act_analyzer/lib/spdlog
 	url = https://github.com/gabime/spdlog.git
+[submodule "actlib/lib/ThunderKittens"]
+	path = actlib/lib/ThunderKittens
+	url = https://github.com/HazyResearch/ThunderKittens.git

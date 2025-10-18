@@ -84,7 +84,7 @@ int main(int argc, char** argv) {
     
     // EEG-typical parameters
     const double FS = 256.0;           // 256 Hz sampling rate (typical for EEG)
-    const int SIGNAL_LENGTH = 512;   // 2 seconds of data
+    const int SIGNAL_LENGTH = 1024;   // 2 seconds of data
     const int TRANSFORM_ORDER = 10;   // Higher order for detailed analysis
     
     std::cout << "Configuration:" << std::endl;
@@ -235,7 +235,7 @@ int main(int argc, char** argv) {
     print_separator("SIGNAL GENERATION AND ANALYSIS");
     
     // Generate multiple test signals
-    const int NUM_SIGNALS = 5;
+    const int NUM_SIGNALS = 20;
     std::vector<std::vector<double>> test_signals;
     
     timer.start();

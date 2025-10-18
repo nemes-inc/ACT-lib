@@ -1,0 +1,265 @@
+# Adaptive Chirplet Transform (ACT) - CUDA-only Makefile (Linux)
+#
+# Usage:
+#   make -f Makefile.cuda all        # Build static library with cuBLAS backend
+#   make -f Makefile.cuda clean      # Clean CUDA build artifacts
+#   CUDA_HOME=/opt/cuda make -f Makefile.cuda
+#
+# Notes:
+# - This Makefile is Linux-only and intentionally excludes MLX/Apple paths.
+# - It enables the cuBLAS-accelerated backend via -DUSE_CUDA and links cudart/cublas.
+# - It builds a static library libact_cuda.a containing the core ACT sources + ALGLIB.
+
+#============================
+# Platform guard (Linux only)
+#============================
+UNAME_S := $(shell uname)
+ifeq ($(UNAME_S),Linux)
+else
+  $(error Makefile.cuda is supported only on Linux)
+endif
+
+#============================
+# Toolchain
+#============================
+CXX := g++
+CC  := gcc
+AR  := ar
+NVCC := $(CUDA_HOME)/bin/nvcc
+
+#============================
+# Flags
+#============================
+CXXFLAGS := -std=c++20 -O3 -Wall -Wextra -Wuninitialized -g -MMD -MP -march=native -DUSE_CUDA
+CFLAGS   := -O3 -Wall -Wextra -g -MMD -MP
+NVCCFLAGS := -std=c++20 -O3 -DUSE_CUDA -Xcompiler -fPIC
+
+#============================
+# CUDA
+#============================
+# Allow overriding; if empty, force default
+CUDA_HOME ?= /usr/local/cuda
+ifeq ($(strip $(CUDA_HOME)),)
+CUDA_HOME := /usr/local/cuda
+endif
+INCLUDES  := -Iactlib/include -Iactlib/lib -I$(CUDA_HOME)/include
+LDFLAGS   := -lm -pthread \
+             -L$(CUDA_HOME)/lib64 -Wl,-rpath,$(CUDA_HOME)/lib64 \
+             -lcublas -lcudart -ldl -lrt -lblas -llapack
+
+#============================
+# Directories
+#============================
+OBJDIR := obj-cuda
+LIBDIR := lib-cuda
+BINDIR := bin-cuda
+
+#============================
+# Sources
+#============================
+ACT_CORE_SOURCES := \
+	actlib/src/ACT.cpp \
+	actlib/src/ACT_CPU.cpp \
+	actlib/src/ACT_cuBLAS.cpp
+
+# Toggle for TK custom kernels (requires nvcc)
+ENABLE_TK ?= 1
+
+# Resolve nvcc path and disable TK if not found
+ifeq ($(ENABLE_TK),1)
+  # Prefer $(CUDA_HOME)/bin/nvcc; fall back to PATH
+  NVCC ?= $(CUDA_HOME)/bin/nvcc
+  ifneq ($(wildcard $(NVCC)),)
+    HAVE_NVCC := 1
+  else
+    NVCC_PATH := $(shell command -v nvcc 2>/dev/null)
+    ifneq ($(NVCC_PATH),)
+      NVCC := $(NVCC_PATH)
+      HAVE_NVCC := 1
+    else
+      HAVE_NVCC := 0
+    endif
+  endif
+  ifeq ($(HAVE_NVCC),0)
+    $(warning NVCC not found; disabling ENABLE_TK. Set CUDA_HOME or NVCC on PATH to enable.)
+    ENABLE_TK := 0
+  endif
+endif
+
+# Custom-kernel CUDA sources (ThunderKittens-ready placeholders)
+ifeq ($(ENABLE_TK),1)
+ACT_TK_SOURCES := \
+    actlib/src/ACT_CUDA_TK.cu
+else
+ACT_TK_SOURCES :=
+endif
+
+# ThunderKittens include (vendored submodule) and arch flags
+TK_INCLUDE ?= actlib/lib/ThunderKittens/include
+# GPU arch (set to your SM, e.g., 89 for Ada (RTX 4090), 90 for Hopper/Blackwell)
+SM ?= 89
+ifeq ($(ENABLE_TK),1)
+NVCCFLAGS += -I$(TK_INCLUDE) -gencode arch=compute_$(SM),code=sm_$(SM) -DUSE_TK --expt-extended-lambda --expt-relaxed-constexpr -DKITTENS_HOPPER
+endif
+
+# ALGLIB subset (same as main Makefile)
+ALGLIB_SOURCES := \
+	actlib/lib/alglib/alglib-cpp/src/ap.cpp \
+	actlib/lib/alglib/alglib-cpp/src/alglibinternal.cpp \
+	actlib/lib/alglib/alglib-cpp/src/alglibmisc.cpp \
+	actlib/lib/alglib/alglib-cpp/src/optimization.cpp \
+	actlib/lib/alglib/alglib-cpp/src/linalg.cpp \
+	actlib/lib/alglib/alglib-cpp/src/solvers.cpp \
+	actlib/lib/alglib/alglib-cpp/src/dataanalysis.cpp \
+	actlib/lib/alglib/alglib-cpp/src/interpolation.cpp \
+	actlib/lib/alglib/alglib-cpp/src/specialfunctions.cpp \
+	actlib/lib/alglib/alglib-cpp/src/statistics.cpp \
+	actlib/lib/alglib/alglib-cpp/src/fasttransforms.cpp \
+	actlib/lib/alglib/alglib-cpp/src/integration.cpp \
+	actlib/lib/alglib/alglib-cpp/src/diffequations.cpp
+
+#============================
+# Objects
+#============================
+ACT_CORE_OBJECTS := $(ACT_CORE_SOURCES:%.cpp=$(OBJDIR)/%.o)
+ACT_TK_OBJECTS   := $(ACT_TK_SOURCES:%.cu=$(OBJDIR)/%.o)
+ALGLIB_OBJECTS   := $(ALGLIB_SOURCES:%.cpp=$(OBJDIR)/%.o)
+OBJECTS          := $(ACT_CORE_OBJECTS) $(ACT_TK_OBJECTS) $(ALGLIB_OBJECTS)
+
+#============================
+# Test and profiler executables
+#============================
+TEST_SOURCES := actlib/test/test_act_cublas.cpp
+TEST_OBJECTS := $(TEST_SOURCES:%.cpp=$(OBJDIR)/%.o)
+TEST_TARGET  := $(BINDIR)/test_act_cublas
+
+ifeq ($(ENABLE_TK),1)
+TEST_TK_SOURCES := actlib/test/test_act_tk.cpp
+TEST_TK_OBJECTS := $(TEST_TK_SOURCES:%.cpp=$(OBJDIR)/%.o)
+TEST_TK_TARGET  := $(BINDIR)/test_act_tk
+endif
+
+PROFILE_SOURCES := actlib/test/profile_cublas.cpp
+PROFILE_OBJECTS := $(PROFILE_SOURCES:%.cpp=$(OBJDIR)/%.o)
+PROFILE_TARGET  := $(BINDIR)/profile_cublas
+
+ifeq ($(ENABLE_TK),1)
+PROFILE_TK_SOURCES := actlib/test/profile_tk.cpp
+PROFILE_TK_OBJECTS := $(PROFILE_TK_SOURCES:%.cpp=$(OBJDIR)/%.o)
+PROFILE_TK_TARGET  := $(BINDIR)/profile_tk
+endif
+
+#============================
+# Default target
+#============================
+all: $(LIBDIR)/libact_cuda.a
+	@echo "✅ Built $(LIBDIR)/libact_cuda.a (CUDA-only)"
+
+#============================
+# Library
+#============================
+$(LIBDIR)/libact_cuda.a: $(OBJECTS) | $(LIBDIR)
+	@echo "Archiving $@..."
+	@$(AR) rcs $@ $(OBJECTS)
+# Build and run smoke test
+test: $(TEST_TARGET)
+	@echo "🚀 Running ACT_cuBLAS smoke test..."
+	@./$(TEST_TARGET)
+
+ifeq ($(ENABLE_TK),1)
+# Build and run TK custom-kernel smoke test
+test_tk: $(TEST_TK_TARGET)
+	@echo "🚀 Running ACT_CUDA_TK smoke test..."
+	@./$(TEST_TK_TARGET)
+else
+test_tk:
+	@echo "⚠ ThunderKittens custom-kernel build disabled (no nvcc). Set CUDA_HOME or ENABLE_TK=1 with nvcc available."
+endif
+
+# Build and run profiler (pass extra args via ARGS="--len 1024 --order 10 --signals 8")
+profile: $(PROFILE_TARGET)
+	@echo "📊 Running ACT_cuBLAS profiler..."
+	@./$(PROFILE_TARGET) $(ARGS)
+
+ifeq ($(ENABLE_TK),1)
+profile_tk: $(PROFILE_TK_TARGET)
+	@echo "📊 Running ACT_CUDA_TK profiler..."
+	@./$(PROFILE_TK_TARGET) $(ARGS)
+else
+profile_tk:
+	@echo "⚠ TK profiler disabled (ENABLE_TK=0 or no nvcc)."
+endif
+
+#============================
+# Create build directories
+#============================
+$(OBJDIR):
+	@mkdir -p $(OBJDIR)/actlib/src
+	@mkdir -p $(OBJDIR)/actlib/lib/alglib/alglib-cpp/src
+	@mkdir -p $(OBJDIR)/actlib/test
+
+$(LIBDIR):
+	@mkdir -p $(LIBDIR)
+
+$(BINDIR):
+	@mkdir -p $(BINDIR)
+$(OBJDIR)/%.o: %.cpp | $(OBJDIR)
+	@echo "Compiling $<..."
+	@mkdir -p $(dir $@)
+	@$(CXX) $(CXXFLAGS) $(INCLUDES) -c $< -o $@
+
+ifeq ($(ENABLE_TK),1)
+# CUDA .cu compilation (NVCC)
+$(OBJDIR)/%.o: %.cu | $(OBJDIR)
+	@echo "Compiling CUDA $<..."
+	@mkdir -p $(dir $@)
+	@$(NVCC) $(NVCCFLAGS) -Iactlib/include -Iactlib/lib -I$(CUDA_HOME)/include -c $< -o $@
+endif
+
+# Test linking
+$(TEST_TARGET): $(LIBDIR)/libact_cuda.a $(TEST_OBJECTS) | $(BINDIR)
+	@echo "Linking smoke test $@..."
+	@$(CXX) $(TEST_OBJECTS) -o $@ -L$(LIBDIR) -lact_cuda $(LDFLAGS)
+
+ifeq ($(ENABLE_TK),1)
+# TK test linking
+$(TEST_TK_TARGET): $(LIBDIR)/libact_cuda.a $(TEST_TK_OBJECTS) | $(BINDIR)
+	@echo "Linking TK smoke test $@..."
+	@$(CXX) $(TEST_TK_OBJECTS) -o $@ -L$(LIBDIR) -lact_cuda $(LDFLAGS)
+endif
+
+# Profile linking
+$(PROFILE_TARGET): $(LIBDIR)/libact_cuda.a $(PROFILE_OBJECTS) | $(BINDIR)
+	@echo "Linking profiler $@..."
+	@$(CXX) $(PROFILE_OBJECTS) -o $@ -L$(LIBDIR) -lact_cuda $(LDFLAGS)
+
+ifeq ($(ENABLE_TK),1)
+$(PROFILE_TK_TARGET): $(LIBDIR)/libact_cuda.a $(PROFILE_TK_OBJECTS) | $(BINDIR)
+	@echo "Linking TK profiler $@..."
+	@$(CXX) $(PROFILE_TK_OBJECTS) -o $@ -L$(LIBDIR) -lact_cuda $(LDFLAGS)
+endif
+#============================
+# Cleaning
+#============================
+clean:
+	@echo "🧹 Cleaning CUDA build artifacts..."
+	@rm -rf $(OBJDIR) $(LIBDIR) $(BINDIR)
+	@echo "✅ Clean complete"
+
+#============================
+# Help
+#============================
+help:
+	@echo "ACT CUDA-only Makefile (Linux)"
+	@echo "Targets:"
+	@echo "  all          - Build static library libact_cuda.a"
+	@echo "  clean        - Remove CUDA build artifacts"
+	@echo "Variables:"
+	@echo "  CUDA_HOME    - CUDA toolkit root (default: /usr/local/cuda)"
+
+#============================
+# Dependencies
+#============================
+-include $(OBJECTS:.o=.d)
+
+.PHONY: all clean help

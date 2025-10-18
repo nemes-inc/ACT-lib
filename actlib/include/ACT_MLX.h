@@ -6,9 +6,11 @@
 #include <utility>
 #include <vector>
 #include <memory>
+#include <functional>
 
 #ifdef USE_MLX
 #include "mlx/mlx.h"
+#include "mlx/compile.h"
 namespace mx = mlx::core;
 #endif
 
@@ -65,6 +67,9 @@ private:
     mutable std::unique_ptr<mx::array> dict_gpu_; // shape {m, n}
 
     void ensure_mlx_dict() const;
+
+    // Compiled MLX function: takes [A, x] and returns [idx, best_val]
+    mutable std::function<std::vector<mx::array>(const std::vector<mx::array>&)> search_fn_;
 #endif
 };
 
