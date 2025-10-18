@@ -10,6 +10,8 @@
 #endif
 
 #ifdef USE_MLX
+// Only include compile API in the source to avoid leaking it via headers
+#include "mlx/compile.h"
 // Public accessor for device dictionary (float32 only)
 template <typename Scalar>
 const mx::array& ACT_MLX_T<Scalar>::get_dict_gpu() const {
@@ -36,22 +38,7 @@ ACT_MLX_T<Scalar>::ACT_MLX_T(double FS,
         std::cout << std::endl;
     }
 
-    // Create a compiled function (do this once during initialization)
-    // NOTE: MLX compile requires a non-capturing callable. We therefore pass the
-    // dictionary A and the signal x as inputs to the compiled function.
-    #ifdef USE_MLX
-    if constexpr (std::is_same_v<Scalar, float>) {
-        search_fn_ = mx::compile([](const std::vector<mx::array>& inputs) {
-            // inputs[0] = A (m x n) row-major, inputs[1] = x (m)
-            const mx::array& A = inputs[0];
-            const mx::array& x = inputs[1];
-            auto scores = mx::matmul(mx::transpose(A), x); // shape {n}
-            auto idx = mx::argmax(scores);
-            auto best = mx::take(scores, idx);
-            return std::vector<mx::array>{idx, best};
-        });
-    }
-    #endif
+    // Compiled function is lazily initialized in search_dictionary() for float + USE_MLX
 }
 
 template <typename Scalar>
@@ -87,6 +74,18 @@ std::pair<int, Scalar> ACT_MLX_T<Scalar>::search_dictionary(const Eigen::Ref<con
 
         // Upload signal as float32 1D array directly from Eigen data (one host->device copy)
         mx::array x_arr(const_cast<float*>(signal.data()), mx::Shape{m}, mx::float32);
+
+        // Lazily compile the search function once per instance
+        if (!search_fn_) {
+            search_fn_ = mx::compile([](const std::vector<mx::array>& inputs) {
+                const mx::array& A = inputs[0];
+                const mx::array& x = inputs[1];
+                auto scores = mx::matmul(mx::transpose(A), x); // {n}
+                auto idx = mx::argmax(scores);
+                auto best = mx::take(scores, idx);
+                return std::vector<mx::array>{idx, best};
+            });
+        }
 
         // Compiled path: call compiled function with inputs [A, x]
         // Returns vector<array> with [idx, best_val]

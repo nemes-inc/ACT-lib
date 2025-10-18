@@ -10,7 +10,6 @@
 
 #ifdef USE_MLX
 #include "mlx/mlx.h"
-#include "mlx/compile.h"
 namespace mx = mlx::core;
 #endif
 

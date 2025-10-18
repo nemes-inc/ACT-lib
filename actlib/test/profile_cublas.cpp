@@ -57,7 +57,7 @@ int main(int argc, char** argv) {
 
     // Defaults (moderate sizes for quick profiling)
     double FS = 256.0;
-    int SIGNAL_LENGTH = 1024;
+    int SIGNAL_LENGTH = 512;
     int TRANSFORM_ORDER = 10;
     int NUM_SIGNALS = 20;
 
