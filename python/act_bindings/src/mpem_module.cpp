@@ -172,6 +172,11 @@ public:
         return out;
     }
 
+    std::vector<double> g(double tc, double fc, double logDt, double c) const {
+        auto v = act_->g(tc, fc, logDt, c);
+        return to_std_vector(v);
+    }
+
     double fs() const { return fs_; }
     int length() const { return length_; }
     py::dict dict_info() const {
@@ -241,6 +246,11 @@ public:
         return out;
     }
 
+    std::vector<double> g(double tc, double fc, double logDt, double c) const {
+        auto v = act_->g(tc, fc, logDt, c);
+        return to_std_vector(v);
+    }
+
     double fs() const { return fs_; }
     int length() const { return length_; }
     py::dict dict_info() const {
@@ -281,6 +291,8 @@ PYBIND11_MODULE(mpbfgs, m) {
              py::arg("signal"),
              py::arg("order") = 1,
              py::call_guard<py::scoped_ostream_redirect, py::scoped_estream_redirect>())
+        .def("g", &ActCPUEngine::g,
+             py::arg("tc"), py::arg("fc"), py::arg("logDt"), py::arg("c"))
         .def_property_readonly("fs", &ActCPUEngine::fs)
         .def_property_readonly("length", &ActCPUEngine::length)
         .def("dict_info", &ActCPUEngine::dict_info);
@@ -297,6 +309,8 @@ PYBIND11_MODULE(mpbfgs, m) {
              py::arg("signal"),
              py::arg("order") = 1,
              py::call_guard<py::scoped_ostream_redirect, py::scoped_estream_redirect>())
+        .def("g", &ActMLXEngine::g,
+             py::arg("tc"), py::arg("fc"), py::arg("logDt"), py::arg("c"))
         .def_property_readonly("fs", &ActMLXEngine::fs)
         .def_property_readonly("length", &ActMLXEngine::length)
         .def("dict_info", &ActMLXEngine::dict_info);
@@ -314,6 +328,10 @@ PYBIND11_MODULE(mpbfgs, m) {
         py::dict transform(py::array_t<double, py::array::c_style | py::array::forcecast> signal,
                            int order = 1, bool /*debug*/ = false) const {
             return cpu_.transform(signal, order);
+        }
+
+        std::vector<double> g(double tc, double fc, double logDt, double c) const {
+            return cpu_.g(tc, fc, logDt, c);
         }
 
         double fs() const { return cpu_.fs(); }
@@ -338,6 +356,8 @@ PYBIND11_MODULE(mpbfgs, m) {
              py::arg("order") = 1,
              py::arg("debug") = false,
              py::call_guard<py::scoped_ostream_redirect, py::scoped_estream_redirect>())
+        .def("g", &ActEngine::g,
+             py::arg("tc"), py::arg("fc"), py::arg("logDt"), py::arg("c"))
         .def_property_readonly("fs", &ActEngine::fs)
         .def_property_readonly("length", &ActEngine::length)
         .def("dict_info", &ActEngine::dict_info);

@@ -316,6 +316,28 @@ ACT (Base)
 - **logDt (Duration)**: Logarithmic duration parameter
 - **c (Chirp Rate)**: Frequency modulation rate (Hz/s)
 
+### Computing `logDt` (dictionary duration parameter)
+- `logDt` is the natural log of the Gaussian time-scale `Dt` in seconds used in the envelope:
+  `g[n] = exp(-0.5 * ((t - tc) / Dt)^2) * cos(2π( c (t - tc)^2 + fc (t - tc) ))`.
+- To choose dictionary bounds from desired durations (seconds):
+  - `logDt_min = ln(Dt_min_s)`
+  - `logDt_max = ln(Dt_max_s)`
+- Examples (seconds → `logDt`):
+  - 50 ms = 0.050 s → `logDt ≈ ln(0.050) = -2.9957`
+  - 100 ms = 0.100 s → `logDt ≈ -2.3026`
+  - 250 ms = 0.250 s → `logDt ≈ -1.3863`
+  - 500 ms = 0.500 s → `logDt ≈ -0.6931`
+- If you think in samples at sampling rate `fs` (Hz):
+  - `Dt_s = Dt_samples / fs`
+  - `logDt = ln(Dt_samples / fs)`
+  - Example: `Dt_samples = 64`, `fs = 256 Hz` → `logDt = ln(64/256) = ln(0.25) ≈ -1.3863`
+- Relation to Gaussian FWHM: for `exp(-0.5*(t/Dt)^2)`, `FWHM ≈ 2.355·Dt`. If you specify FWHM in seconds, use `logDt = ln(FWHM / 2.355)`.
+- Typical EEG windows (fs ≈ 256 Hz, 1 s windows): short bursts 50–500 ms ⇒ `logDt ∈ [ln(0.05), ln(0.5)] ≈ [-3.00, -0.69]`.
+  The examples in this README (`-3 .. -1`) cover ≈50–370 ms.
+- Step size guidance: `logDt_step` of `0.25`–`0.5` is a good starting point (gives geometric spacing in `Dt`).
+- Output mapping: results often report `duration_ms = 1000 * exp(logDt)`. This is the inverse of the above.
+- Implementation note: internally, `logDt` is clamped to `[-10, 2]` for stability; choose bounds within this interval.
+
 ### Chirplet Generation: C++ vs Python Reference
 
 The original Python reference implementation generated chirplets without unit-energy normalization.
