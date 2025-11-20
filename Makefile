@@ -47,6 +47,7 @@ TEST_ACT_CPU_F_SOURCES = actlib/test/test_act_cpu_f.cpp
 TEST_ACT_ACCEL_SOURCES = actlib/test/test_act_accel.cpp
 TEST_ACT_CPU_MT_SOURCES = actlib/test/test_act_cpu_mt.cpp
 TEST_ACT_SYNTHETIC_SOURCES = actlib/test/test_act_synthetic.cpp
+TEST_ACT_CHALLENGING_SOURCES = actlib/test/test_act_challenging.cpp
 PROFILE_ACT_SOURCES = actlib/test/profile_act.cpp
 PROFILE_ACT_MT_SOURCES = actlib/test/profile_act_mt.cpp
 
@@ -130,13 +131,14 @@ TEST_ACT_ACCEL_TARGET = $(BINDIR)/test_act_accel
 TEST_ACT_CPU_MT_TARGET = $(BINDIR)/test_act_cpu_mt
 PROFILE_ACT_TARGET = $(BINDIR)/profile_act
 TEST_ACT_SYNTHETIC_TARGET = $(BINDIR)/test_act_synthetic
+TEST_ACT_CHALLENGING_TARGET = $(BINDIR)/test_act_challenging
 TEST_ACT_MLX_TARGET = $(BINDIR)/test_act_mlx
 PROFILE_ACT_MT_TARGET = $(BINDIR)/profile_act_mt
 EEG_ACT_ANALYZER_TARGET = $(BINDIR)/eeg_act_analyzer
 TEST_DICT_IO_TARGET = $(BINDIR)/test_dict_io
 
 # Default target
-all: $(TEST_ACT_TARGET) $(TEST_ACT_CPU_TARGET) $(TEST_ACT_CPU_F_TARGET) $(TEST_ACT_ACCEL_TARGET) $(TEST_ACT_CPU_MT_TARGET) $(PROFILE_ACT_TARGET) $(PROFILE_ACT_MT_TARGET) $(TEST_ACT_SYNTHETIC_TARGET) $(EEG_ACT_ANALYZER_TARGET) $(TEST_DICT_IO_TARGET) $(TEST_ACT_MLX_TARGET)
+all: $(TEST_ACT_TARGET) $(TEST_ACT_CPU_TARGET) $(TEST_ACT_CPU_F_TARGET) $(TEST_ACT_ACCEL_TARGET) $(TEST_ACT_CPU_MT_TARGET) $(PROFILE_ACT_TARGET) $(PROFILE_ACT_MT_TARGET) $(TEST_ACT_SYNTHETIC_TARGET) $(TEST_ACT_CHALLENGING_TARGET) $(EEG_ACT_ANALYZER_TARGET) $(TEST_DICT_IO_TARGET) $(TEST_ACT_MLX_TARGET)
 
 # Create directories
 $(OBJDIR):
@@ -218,6 +220,11 @@ $(TEST_ACT_SYNTHETIC_TARGET): $(ACT_CORE_OBJECTS) $(OBJDIR)/actlib/test/test_act
 	@$(CXX) $^ -o $@ $(LDFLAGS)
 	@echo "✅ Synthetic ACT test executable created: $@"
 
+$(TEST_ACT_CHALLENGING_TARGET): $(ACT_CORE_OBJECTS) $(OBJDIR)/actlib/test/test_act_challenging.o $(ALGLIB_OBJECTS) | $(BINDIR)
+	@echo "Linking challenging ACT test executable..."
+	@$(CXX) $^ -o $@ $(LDFLAGS)
+	@echo "✅ Challenging ACT test executable created: $@"
+
 $(TEST_ACT_MLX_TARGET): $(ACT_CORE_OBJECTS) $(OBJDIR)/actlib/test/test_act_mlx.o $(ALGLIB_OBJECTS) | $(BINDIR)
 	@echo "Linking ACT MLX test executable..."
 	@$(CXX) $^ -o $@ $(LDFLAGS)
@@ -236,6 +243,10 @@ test-act-mlx: $(TEST_ACT_MLX_TARGET)
 test-act-synthetic: $(TEST_ACT_SYNTHETIC_TARGET)
 	@echo "Running synthetic ACT test..."
 	@./$(TEST_ACT_SYNTHETIC_TARGET)
+
+test-act-challenging: $(TEST_ACT_CHALLENGING_TARGET)
+	@echo "Running challenging ACT test..."
+	@./$(TEST_ACT_CHALLENGING_TARGET)
 
 test-cpu-f: $(TEST_ACT_CPU_F_TARGET)
 	@echo "Running ACT_CPU (float) test..."
